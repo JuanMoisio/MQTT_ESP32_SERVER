@@ -1,510 +1,247 @@
-# 🖥️ ESP32-C3 SuperMini - Broker TCP Server
+# 🔐 Sistema Integrado de Huella Dactilar ESP32
 
-**✅ SISTEMA COMPLETO DE HUELLA DACTILAR FUNCIONAL ✅**
+> **Sistema completo de reconocimiento biométrico con ESP32-C3 como broker TCP y ESP32-WROOM como cliente de huellas, incluyendo herramientas de monitoreo automático con Python.**
 
-Este proyecto implementa un **servidor TCP personalizado** en el ESP32-C3 SuperMini que actúa como **broker central** para coordinar múltiples dispositivos ESP32 en el sistema de reconocimiento de huellas dactilares. **Protocolo TCP custom con JSON, no MQTT estándar.**
+[![PlatformIO](https://img.shields.io/badge/PlatformIO-Compatible-orange)](https://platformio.org/)
+[![ESP32](https://img.shields.io/badge/ESP32-C3%20%7C%20WROOM-blue)](https://www.espressif.com/)
+[![Python](https://img.shields.io/badge/Python-3.7+-green)](https://python.org/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## 🏗️ Arquitectura del Sistema
+## 🏗️ **Arquitectura del Sistema**
 
 ```
-    [Raspberry Pi] ←── WiFi ──→ [ESP32-C3 Broker AP] ←── WiFi ──→ [Módulos ESP32]
-         |                           |                              ├── Control de Acceso
-    192.168.4.2                 192.168.4.1                       ├── Motores
-                                                                   ├── Sensores  
-                                                                   └── Actuadores
-    
-    Red: DEPOSITO_BROKER (192.168.4.0/24)
-    Password: deposito123
-    Broker IP fija: 192.168.4.1:1883
+┌─────────────────────┐    TCP/IP     ┌─────────────────────┐
+│   ESP32-C3 SuperMini│◄─────────────►│  ESP32-WROOM-32    │
+│   (Broker Server)   │   WiFi AP     │  (Client Huella)   │
+│                     │               │                     │
+│  • Red: DEPOSITO_   │               │  • Sensor R305     │
+│  • IP: 192.168.4.1  │               │  • Display OLED    │
+│  • Puerto: 1883     │               │  • Auto-conexión   │
+└─────────────────────┘               └─────────────────────┘
+           ▲                                     ▲
+           │                                     │
+           ▼                                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│              🐍 Python Monitor Scripts                      │
+│                                                             │
+│  • Auto-detección USB                                      │
+│  • Monitoreo dual en tiempo real                          │
+│  • Upload automático con PlatformIO                       │
+│  • Comandos remotos vía TCP                               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## 📊 Estado Actual del Proyecto
+## ⚡ **Inicio Rápido**
 
-**✅ COMPLETADO Y PROBADO:**
-- ✅ ESP32-C3 como Access Point funcional
-- ✅ Broker MQTT integrado operativo
-- ✅ Autodescubrimiento de módulos
-- ✅ Sistema de heartbeat
-- ✅ API de configuración dinámica  
-- ✅ Monitor serie funcionando
-- ✅ Ejemplos de código listos
-- ✅ Cliente Python completo
-- ✅ Documentación detallada
-
-**📡 Salida del Sistema (Confirmado funcionando):**
-```
-==============================================
-🚀 INICIANDO BROKER MQTT ESP32-C3 SuperMini
-==============================================
-💾 RAM libre: 280036
-📡 Configurando ESP32-C3 como Access Point...
-✅ Access Point iniciado exitosamente!
-📶 SSID: DEPOSITO_BROKER
-🔑 Password: deposito123  
-🌐 IP del broker: 192.168.4.1
-📡 MAC Address: 50:78:7D:47:3E:C1
-🚀 Sistema WiFi listo!
-✅ Servidor MQTT iniciado en puerto 1883
-🎉 Sistema listo. Esperando conexiones...
+### 1️⃣ **Preparación del Hardware**
+```bash
+# Conecta los dispositivos:
+ESP32-C3 SuperMini ──USB──► Puerto A del PC
+ESP32-WROOM + R305  ──USB──► Puerto B del PC
 ```
 
-## 🚀 Características Principales
+### 2️⃣ **Instalación y Deploy Automático**
+```bash
+# Clona el repositorio
+git clone [tu-repo-url]
+cd PlatformIO/Projects
 
-- ✅ **Broker MQTT integrado** - Sin dependencias externas
-- ✅ **Autodescubrimiento de módulos** - Los módulos se registran automáticamente
-- ✅ **Configuración dinámica** - Sin necesidad de recompilar para agregar módulos
-- ✅ **Sistema de heartbeat** - Detección automática de módulos desconectados
-- ✅ **Protocolo JSON estandarizado** - Comunicación estructurada
-- ✅ **Monitoreo en tiempo real** - Comandos de depuración por serie
+# Ejecuta el sistema completo
+cd monitoresPy
+python3 launcher.py
+```
 
-## ⚡ INICIO RÁPIDO (El sistema ya está funcionando)
+### 3️⃣ **Uso del Sistema**
+```bash
+# Una vez iniciado el monitor, usa estos comandos:
+server:scan_fingerprint    # 🔍 Escaneo remoto de huella
+server:status_fingerprint  # 📊 Estado del sensor
+server:info_fingerprint    # ℹ️ Info del dispositivo
+client:scan                # 👆 Escaneo directo
+reset:both                 # 🔄 Resetear ambos ESP32
+```
 
-### 🎯 **Para integrar el PRIMER MÓDULO/DISPOSITIVO:**
+## 🚀 **Características Principales**
 
-**El broker ESP32-C3 YA ESTÁ OPERATIVO y esperando conexiones en:**
-- **📶 Red WiFi:** `DEPOSITO_BROKER` 
-- **🔑 Password:** `deposito123`
-- **🌐 IP Broker:** `192.168.4.1:1883`
-- **📡 Puerto MQTT:** `1883`
+### 🤖 **Auto-Detección Inteligente**
+- ✅ Detección automática de puertos ESP32 por descriptores USB
+- ✅ Identificación automática entre ESP32-C3 y ESP32-WROOM  
+- ✅ Reconexión automática en caso de desconexión
+- ✅ Limpieza automática de puertos ocupados
 
-### 🔧 **Configuración del platformio.ini (YA CONFIGURADO):**
+### 🌐 **Protocolo TCP Personalizado**
+- ✅ Servidor TCP custom en ESP32-C3 (no MQTT estándar)
+- ✅ Comunicación JSON sobre TCP para máximo rendimiento
+- ✅ Red WiFi AP automática `DEPOSITO_BROKER`
+- ✅ Heartbeat y registro automático de módulos
 
+### 🔐 **Sistema de Huellas Avanzado**
+- ✅ Sensor R305 con 1000+ templates de huella
+- ✅ Display OLED SH1106 con interfaz gráfica
+- ✅ Procesamiento automático de coincidencias
+- ✅ Comandos remotos via broker TCP
+
+### 🛠️ **Herramientas de Desarrollo**
+- ✅ Upload automático con detección de dispositivo
+- ✅ Monitor dual con salida organizada por colores
+- ✅ Scripts de prueba y debug independientes
+- ✅ Reset físico remoto de dispositivos
+
+## 📁 **Estructura del Proyecto**
+
+```
+PlatformIO/Projects/
+├── 📄 README.md                    # Esta documentación
+├── 🖥️ BorkerMQTT/                   # ESP32-C3 Broker Server
+│   ├── src/main.cpp               # Servidor TCP personalizado
+│   ├── platformio.ini             # Config PlatformIO (sin puerto fijo)
+│   └── 📄 README.md               # Docs específicas del broker
+├── 📱 HuellaDactilar/              # ESP32-WROOM Client
+│   ├── src/
+│   │   ├── main.cpp               # Cliente principal
+│   │   └── MqttBrokerClient.cpp   # Protocolo TCP custom
+│   ├── platformio.ini             # Config PlatformIO (sin puerto fijo)
+│   └── 📄 README.md               # Docs específicas del cliente
+├── 🐍 monitoresPy/                 # Scripts Python de monitoreo
+│   ├── launcher.py                # 🚀 Lanzador principal
+│   ├── single_terminal_monitor.py # 📺 Monitor dual automático
+│   ├── auto_upload.py             # ⬆️ Upload automático  
+│   ├── quick_upload.py            # ⚡ Upload rápido
+│   ├── detect_devices.py          # 🔍 Detección de dispositivos
+│   └── 📄 README.md               # Docs de herramientas Python
+└── 📄 TECHNICAL.md                # Documentación técnica avanzada
+```
+
+## 🔧 **Instalación de Dependencias**
+
+### **Python Requirements**
+```bash
+# Instalar dependencias Python
+pip3 install pyserial platformio
+
+# Verificar instalación
+python3 -c "import serial; print('PySerial OK')"
+pio --version
+```
+
+### **Hardware Requirements**
+- **ESP32-C3 SuperMini** (Broker Server)
+- **ESP32-WROOM-32** (Cliente Huella)  
+- **Sensor R305** (Huella dactilar)
+- **Display OLED SH1106** 128x64
+- **Cables USB** para ambos ESP32
+
+### **PlatformIO Libraries** (Auto-instaladas)
 ```ini
-[env:esp32c3-supermini]
-platform = espressif32
-board = lolin_c3_mini
-framework = arduino
-lib_deps = 
-    knolleary/PubSubClient@^2.8
-    bblanchon/ArduinoJson@^7.0.4
-monitor_speed = 115200
-upload_speed = 921600
-monitor_filters = esp32_exception_decoder
-monitor_port = /dev/cu.usbmodem*
-monitor_rts = 0
-monitor_dtr = 0
-build_flags = 
-    -DARDUINO_USB_CDC_ON_BOOT=1
-    -DARDUINO_USB_DFU_ON_BOOT=0
-    -DARDUINO_USB_MSC_ON_BOOT=0
-    -DCORE_DEBUG_LEVEL=1
+# Para ESP32-C3 (BorkerMQTT)
+ArduinoJson @ ^6.21.4
+WiFi (built-in)
+
+# Para ESP32-WROOM (HuellaDactilar)  
+ArduinoJson @ ^6.21.4
+Adafruit Fingerprint Sensor Library @ ^2.1.0
+U8g2 @ ^2.34.22
 ```
 
-### 🚀 **Comandos de Compilación y Monitor:**
+## 📊 **Comandos Disponibles**
 
+| Comando | Dispositivo | Descripción |
+|---------|-------------|-------------|
+| `server:scan_fingerprint` | 🖥️ ESP32-C3 → 📱 ESP32-WROOM | Escaneo remoto de huella |
+| `server:status_fingerprint` | 🖥️ ESP32-C3 → 📱 ESP32-WROOM | Estado del sensor R305 |
+| `server:info_fingerprint` | 🖥️ ESP32-C3 → 📱 ESP32-WROOM | Información del dispositivo |
+| `client:scan` | 📱 ESP32-WROOM | Escaneo directo local |
+| `client:info` | 📱 ESP32-WROOM | Info local del sensor |
+| `reset:server` | 🖥️ ESP32-C3 | Reset del broker |
+| `reset:client` | 📱 ESP32-WROOM | Reset del cliente |
+| `reset:both` | 🔄 Ambos | Reset completo del sistema |
+
+## 🏃‍♂️ **Flujo de Trabajo Típico**
+
+### **Desarrollo Diario**
 ```bash
-# Limpiar y compilar
-platformio run -e esp32c3-supermini --target clean
-platformio run -e esp32c3-supermini --target upload
+# 1. Conectar hardware y abrir monitor automático
+cd monitoresPy && python3 launcher.py
 
-# Monitor serie
-platformio device monitor --port /dev/cu.usbmodem* --baud 115200
+# 2. Desarrollar código en ambos proyectos
+# 3. Upload automático detectará cambios
+python3 auto_upload.py
+
+# 4. Probar funcionalidad
+server:scan_fingerprint
 ```
 
-### ✅ **Estado Confirmado del Sistema:**
-```
-🚀 INICIANDO BROKER MQTT ESP32-C3 SuperMini
-💾 RAM libre: 280036 bytes
-✅ Access Point iniciado exitosamente!
-📶 SSID: DEPOSITO_BROKER
-🔑 Password: deposito123
-🌐 IP del broker: 192.168.4.1
-🎉 Sistema listo. Esperando conexiones...
-```
-
-## 🔌 Protocolo de Comunicación (PROBADO Y FUNCIONANDO)
-
-### 📡 **Conexión de Dispositivos al Broker**
-
-**Para CUALQUIER dispositivo (Raspberry Pi, ESP32, PC, etc.):**
-
-1. **Conectar a WiFi:**
-   - SSID: `DEPOSITO_BROKER`
-   - Password: `deposito123` 
-   - IP automática en rango: `192.168.4.2-254`
-
-2. **Conectar al broker MQTT:**
-   - Host: `192.168.4.1`
-   - Puerto: `1883`
-   - No requiere autenticación
-
-### 📦 **Registro de Módulos**
-
-**Paso 1:** Un módulo se registra enviando por TCP al puerto 1883:
-
-```json
-{
-  "type": "register",
-  "module_id": "control_acceso_001", 
-  "module_type": "control_acceso",
-  "capabilities": "rfid,lock,unlock,status"
-}
-```
-
-**Paso 2:** El broker responde:
-
-```json
-{
-  "type": "registration_response",
-  "module_id": "control_acceso_001",
-  "status": "success",
-  "message": "Módulo registrado exitosamente", 
-  "timestamp": 12345
-}
-```
-
-### 🔄 **Tipos de Módulos Soportados (Configurables):**
-- `control_acceso` - RFID, cerraduras, sensores de puerta
-- `motor` - Motores paso a paso, servos, motores DC  
-- `sensor_temperatura` - Sensores de temperatura
-- `sensor_humedad` - Sensores de humedad
-- `actuador` - Relés, solenoides, actuadores lineales
-- `display` - Pantallas LCD, OLED, LED matrices
-- `rfid` - Lectores RFID/NFC
-- `camara` - Cámaras, sensores de imagen
-
-### Heartbeat
-
-Cada módulo debe enviar heartbeat cada 30 segundos:
-
-```json
-{
-  "type": "heartbeat",
-  "module_id": "control_acceso_001"
-}
-```
-
-### Publicar Datos
-
-```json
-{
-  "type": "publish",
-  "topic": "deposito/control_acceso/status/door",
-  "payload": {
-    "status": "locked",
-    "last_access": "2025-10-09T10:30:00Z",
-    "battery_level": 85
-  }
-}
-```
-
-### Suscribirse a Topics
-
-```json
-{
-  "type": "subscribe",
-  "topic": "deposito/control_acceso/cmd/unlock"
-}
-```
-
-### Comandos de Configuración
-
-**Obtener lista de módulos:**
-```json
-{
-  "type": "config",
-  "config_type": "get_modules"
-}
-```
-
-**Activar/Desactivar modo discovery:**
-```json
-{
-  "type": "config",
-  "config_type": "set_discovery",
-  "value": true
-}
-```
-
-## 🛠️ Comandos de Depuración
-
-Conectar por serie (115200 baudios) y usar:
-
-- `status` - Estado general del sistema
-- `modules` - Lista de módulos registrados  
-- `clients` - Clientes conectados
-- `discovery on/off` - Activar/desactivar discovery
-
-## 📡 Estructura de Topics MQTT
-
-```
-deposito/
-├── control_acceso/
-│   ├── cmd/unlock              # Comandos para desbloquear
-│   ├── cmd/lock                # Comandos para bloquear
-│   ├── status/door             # Estado de la puerta
-│   └── config/                 # Configuración del módulo
-├── motor1/
-│   ├── cmd/move                # Comandos de movimiento
-│   ├── cmd/stop                # Comando de parada
-│   ├── status/position         # Posición actual
-│   └── config/                 # Configuración del motor
-├── sensores/
-│   ├── temperatura/data        # Datos de temperatura
-│   ├── humedad/data           # Datos de humedad
-│   └── config/                # Configuración de sensores
-└── system/
-    ├── discovery/             # Autodescubrimiento
-    ├── health/               # Estado de salud
-    └── config/              # Configuración del sistema
-```
-
-## 🔧 Tipos de Módulos Soportados
-
-Los siguientes tipos de módulos están preconfigurados:
-
-- `control_acceso` - RFID, cerraduras, sensores de puerta
-- `motor` - Motores paso a paso, servos, motores DC
-- `sensor_temperatura` - Sensores de temperatura
-- `sensor_humedad` - Sensores de humedad
-- `actuador` - Relés, solenoides, actuadores lineales
-- `display` - Pantallas LCD, OLED, LED matrices
-- `rfid` - Lectores RFID/NFC
-- `camara` - Cámaras, sensores de imagen
-
-Para agregar nuevos tipos, editar `ALLOWED_MODULE_TYPES` en `config.h`.
-
-## 🎯 INTEGRACIÓN DE PRIMER DISPOSITIVO/MÓDULO
-
-### 🔌 **Conexión Inmediata de Cualquier Dispositivo:**
-
-**El broker está LISTO y ESPERANDO conexiones. Para conectar CUALQUIER dispositivo:**
-
-#### **📱 Desde Smartphone/Tablet/PC:**
-1. Buscar WiFi: `DEPOSITO_BROKER`
-2. Conectar con: `deposito123`
-3. Abrir app MQTT (ej: MQTT Explorer)
-4. Conectar a: `192.168.4.1:1883`
-
-#### **🖥️ Desde Raspberry Pi:**
+### **Debugging**
 ```bash
-# Conectar a la red
-sudo nmcli dev wifi connect "DEPOSITO_BROKER" password "deposito123"
+# Monitor con debug detallado  
+python3 single_terminal_monitor.py
 
-# Verificar IP asignada  
-ip addr show
+# Upload específico por proyecto
+python3 quick_upload.py
 
-# Probar conectividad
-ping 192.168.4.1
-
-# Instalar cliente MQTT
-pip3 install paho-mqtt
-
-# Usar el cliente Python incluido
-python3 raspberry_client.py
+# Test de comunicación directa
+python3 direct_server_test.py
 ```
 
-#### **🔧 Desde ESP32 (Primer módulo):**
-```cpp
-#include <WiFi.h>
-#include <ArduinoJson.h>
-
-const char* ssid = "DEPOSITO_BROKER";
-const char* password = "deposito123";
-const char* brokerIP = "192.168.4.1";
-const int brokerPort = 1883;
-
-void setup() {
-  Serial.begin(115200);
-  
-  // Conectar a la red del broker
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  
-  Serial.println("Conectado al broker!");
-  Serial.print("Mi IP: ");
-  Serial.println(WiFi.localIP());
-  
-  // Conectar al broker MQTT
-  WiFiClient client;
-  if (client.connect(brokerIP, brokerPort)) {
-    Serial.println("Conectado al broker MQTT!");
-    
-    // Registrar módulo
-    DynamicJsonDocument doc(512);
-    doc["type"] = "register";
-    doc["module_id"] = "mi_primer_modulo";
-    doc["module_type"] = "sensor_temperatura"; 
-    doc["capabilities"] = "temperature,humidity";
-    
-    String message;
-    serializeJson(doc, message);
-    client.println(message);
-    Serial.println("Módulo registrado!");
-  }
-}
+### **Producción**
+```bash
+# Sistema listo para producción (sin debug)
+python3 launcher.py
 ```
 
-### 📡 **Ventajas del Modo Access Point (YA IMPLEMENTADO):**
-- ✅ **Independiente** - No necesita WiFi externo
-- ✅ **Rango controlado** - Red dedicada solo para el depósito  
-- ✅ **Seguridad** - Red aislada del internet
-- ✅ **Confiabilidad** - Sin dependencia de router externo
-- ✅ **IP fija** - Siempre 192.168.4.1
-- ✅ **Plug & Play** - Dispositivos se conectan automáticamente
+## 🐛 **Troubleshooting**
 
-## 🌐 Integración con Raspberry Pi
+### **Problemas Comunes**
 
-La Raspberry Pi se conecta como cliente MQTT normal:
+#### 📡 **"No se detectan dispositivos ESP32"**
+```bash
+# Verificar puertos
+python3 detect_devices.py
 
-### Python (ejemplo)
-
-```python
-import paho.mqtt.client as mqtt
-import json
-
-def on_connect(client, userdata, flags, rc):
-    print(f"Conectado al broker ESP32-C3: {rc}")
-    
-    # Suscribirse a todos los status
-    client.subscribe("deposito/+/status/+")
-    
-    # Obtener lista de módulos
-    config_msg = {
-        "type": "config",
-        "config_type": "get_modules"
-    }
-    client.publish("deposito/system/config", json.dumps(config_msg))
-
-def on_message(client, userdata, msg):
-    topic = msg.topic
-    payload = json.loads(msg.payload.decode())
-    
-    print(f"Topic: {topic}")
-    print(f"Data: {payload}")
-    
-    # Procesar mensajes según el topic y tipo
-
-client = mqtt.Client()
-client.on_connect = on_connect  
-client.on_message = on_message
-
-# Conectar al ESP32-C3 (cambiar IP según tu configuración)
-client.connect("192.168.4.1", 1883, 60)
-client.loop_forever()
+# Revisar permisos USB (macOS/Linux)
+sudo chmod 666 /dev/tty.usbserial-*
 ```
 
-### Node.js (ejemplo)
+#### 🌐 **"Cliente no conecta al broker"**
+- ✅ Verificar que ESP32-C3 esté creando red `DEPOSITO_BROKER`
+- ✅ Reset del servidor: `reset:server`
+- ✅ Verificar IP 192.168.4.1:1883
 
-```javascript
-const mqtt = require('mqtt');
+#### 👆 **"Sensor de huella no responde"**
+- ✅ Verificar conexiones R305 al ESP32-WROOM
+- ✅ Probar comando local: `client:scan`
+- ✅ Reset del cliente: `reset:client`
 
-const client = mqtt.connect('mqtt://192.168.4.1:1883');
-
-client.on('connect', () => {
-    console.log('Conectado al broker ESP32-C3');
-    
-    // Suscribirse a eventos del sistema
-    client.subscribe('deposito/+/+/+');
-    
-    // Solicitar módulos activos
-    const config = {
-        type: 'config',
-        config_type: 'get_modules'
-    };
-    
-    client.publish('deposito/system/config', JSON.stringify(config));
-});
-
-client.on('message', (topic, message) => {
-    const data = JSON.parse(message.toString());
-    
-    console.log(`Topic: ${topic}`);
-    console.log(`Data:`, data);
-    
-    // Procesar según el topic
-    if (topic.includes('/status/')) {
-        handleStatusUpdate(topic, data);
-    }
-});
-
-function handleStatusUpdate(topic, data) {
-    // Lógica de la aplicación del depósito
-    console.log(`Estado actualizado: ${topic}`, data);
-}
+#### 🔌 **"Error de puerto ocupado"**
+```bash
+# El sistema auto-limpia puertos, pero si persiste:
+sudo killall -9 python3
+python3 launcher.py
 ```
 
-## ⚡ Próximos Pasos
+## 🤝 **Contribución**
 
-1. **Crear módulo de ejemplo** - Un ESP32 con sensor para probar
-2. **Implementar seguridad** - Autenticación y encriptación
-3. **Web dashboard** - Interfaz web para monitoreo
-4. **Persistencia** - Guardar configuración en SPIFFS/LittleFS
-5. **OTA Updates** - Actualización remota del firmware
+1. Fork del repositorio
+2. Crear branch: `git checkout -b feature/nueva-funcionalidad`
+3. Commit: `git commit -am 'Agregar nueva funcionalidad'`
+4. Push: `git push origin feature/nueva-funcionalidad`
+5. Pull Request
 
-## 📝 Notas Importantes
+## 📜 **Licencia**
 
-- **Memoria**: El ESP32-C3 tiene limitaciones de memoria. No conectar más de 10 módulos simultáneamente.
-- **Red**: Asegurar que todos los dispositivos estén en la misma red.
-- **Alimentación**: El ESP32-C3 SuperMini necesita alimentación estable (3.3V o USB).
-- **Antena**: Para mejor alcance WiFi, considerar ESP32-C3 con antena externa.
+Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) para detalles.
 
-## 🔍 Resolución de Problemas
+## 👥 **Autor**
 
-### WiFi no conecta
-- Verificar SSID y password en `config.h`
-- Revisar que la red sea 2.4GHz (no 5GHz)
+**Juan Moisio** - [GitHub](https://github.com/JuanMoisio)
 
-### Módulos no se registran  
-- Verificar que el tipo esté en `ALLOWED_MODULE_TYPES`
-- Comprobar formato JSON del mensaje de registro
+## 🙏 **Agradecimientos**
 
-### Pérdida de conexión
-- Revisar alimentación del ESP32-C3
-- Verificar estabilidad de la red WiFi
-- Aumentar `HEARTBEAT_TIMEOUT` si es necesario
+- **Espressif** por el increíble ecosistema ESP32
+- **PlatformIO** por la herramienta de desarrollo
+- **ArduinoJson** por la biblioteca JSON eficiente
+- **Adafruit** por las librerías de sensores
 
 ---
 
-## 🚀 SIGUIENTE PASO: INTEGRAR PRIMER DISPOSITIVO
-
-### 📋 **Información para el Chat de Integración:**
-
-**BROKER YA FUNCIONANDO - DATOS CONFIRMADOS:**
-- ✅ **Red WiFi:** `DEPOSITO_BROKER` (password: `deposito123`)
-- ✅ **IP Broker:** `192.168.4.1` 
-- ✅ **Puerto MQTT:** `1883`
-- ✅ **Estado:** Operativo y esperando conexiones
-- ✅ **Memoria disponible:** 280KB
-- ✅ **Protocolo:** TCP directo + JSON
-
-### 🎯 **Tareas para el Chat de Integración:**
-
-1. **Elegir tipo de primer dispositivo:**
-   - ESP32 con sensor (recomendado para prueba)
-   - Raspberry Pi con cliente Python
-   - Otro microcontrolador
-   - Smartphone/PC para testing
-
-2. **Usar código base disponible:**
-   - `examples/sensor_module_example.cpp` - ESP32 completo
-   - `examples/raspberry_client.py` - Cliente Python interactivo
-   - Protocolo JSON documentado arriba
-
-3. **Configurar dispositivo:**
-   - Conectar a WiFi `DEPOSITO_BROKER`
-   - Enviar registro JSON al broker
-   - Implementar heartbeat cada 30s
-   - Subscribir/publicar según necesidad
-
-4. **Verificar integración:**
-   - Ver mensajes en monitor serie del broker
-   - Confirmar registro exitoso
-   - Probar intercambio de mensajes
-
-### 🔧 **Archivos Listos para Usar:**
-- `/src/main.cpp` - Broker funcionando 
-- `/examples/sensor_module_example.cpp` - Módulo ESP32 completo
-- `/examples/raspberry_client.py` - Cliente Python full-featured
-- `/include/config.h` - Configuraciones del sistema
-
-### 📞 **Comandos de Debug (Monitor Serie del Broker):**
-- `status` - Estado general del sistema
-- `modules` - Lista módulos registrados
-- `clients` - Clientes conectados
-- `discovery on/off` - Modo autodescubrimiento
-
-**EL BROKER ESTÁ 100% OPERATIVO - LISTO PARA RECIBIR EL PRIMER DISPOSITIVO 🎉**
+⭐ **¡Si este proyecto te ayuda, dale una estrella!** ⭐
