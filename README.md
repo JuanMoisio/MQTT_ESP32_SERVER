@@ -1,8 +1,8 @@
-# 🏭 Broker MQTT ESP32-C3 SuperMini - Sistema Modular de Depósito
+# 🖥️ ESP32-C3 SuperMini - Broker TCP Server
 
-**✅ PROYECTO COMPLETAMENTE FUNCIONAL ✅**
+**✅ SISTEMA COMPLETO DE HUELLA DACTILAR FUNCIONAL ✅**
 
-Este proyecto implementa un broker MQTT completo en un ESP32-C3 SuperMini que funciona como **Access Point independiente** y actúa como interfaz central entre una Raspberry Pi y múltiples módulos ESP32 especializados para sistemas de depósito/almacén.
+Este proyecto implementa un **servidor TCP personalizado** en el ESP32-C3 SuperMini que actúa como **broker central** para coordinar múltiples dispositivos ESP32 en el sistema de reconocimiento de huellas dactilares. **Protocolo TCP custom con JSON, no MQTT estándar.**
 
 ## 🏗️ Arquitectura del Sistema
 
