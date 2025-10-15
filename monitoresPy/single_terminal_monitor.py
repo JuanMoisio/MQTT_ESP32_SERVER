@@ -13,7 +13,12 @@ import subprocess
 import os
 import signal
 import serial.tools.list_ports
+import termios
+import tty
 from datetime import datetime
+
+# Configuración
+MAX_HISTORY = 100  # Máximo de comandos en historial
 
 # Colores
 class Colors:
@@ -26,8 +31,170 @@ class Colors:
     BOLD = '\033[1m'
     END = '\033[0m'
 
+class CommandHistory:
+    """Maneja el historial de comandos con navegación"""
+    
+    def __init__(self, max_size=MAX_HISTORY):
+        self.history = []
+        self.max_size = max_size
+        self.current_index = 0
+        self.temp_command = ""  # Para guardar el comando actual mientras navegas
+        
+    def add_command(self, command):
+        """Agrega un comando al historial"""
+        if command.strip() and (not self.history or self.history[-1] != command):
+            self.history.append(command)
+            if len(self.history) > self.max_size:
+                self.history.pop(0)
+        self.reset_navigation()
+    
+    def reset_navigation(self):
+        """Resetea la navegación al final del historial"""
+        self.current_index = len(self.history)
+        self.temp_command = ""
+    
+    def get_previous(self, current_command=""):
+        """Obtiene el comando anterior (flecha arriba)"""
+        if self.current_index == len(self.history):
+            self.temp_command = current_command
+        
+        if self.current_index > 0:
+            self.current_index -= 1
+            return self.history[self.current_index]
+        return current_command
+    
+    def get_next(self):
+        """Obtiene el comando siguiente (flecha abajo)"""
+        if self.current_index < len(self.history) - 1:
+            self.current_index += 1
+            return self.history[self.current_index]
+        elif self.current_index == len(self.history) - 1:
+            self.current_index += 1
+            return self.temp_command
+        return ""
+    
+    def get_stats(self):
+        """Obtiene estadísticas del historial"""
+        return len(self.history), self.current_index
+
+class InputHandler:
+    """Maneja la entrada de comandos con historial"""
+    
+    def __init__(self):
+        self.history = CommandHistory()
+        self.current_command = ""
+        self.cursor_pos = 0
+        
+    def handle_special_key(self, key):
+        """Maneja teclas especiales (flechas, etc.)"""
+        if key == '\x1b[A':  # Flecha arriba
+            new_command = self.history.get_previous(self.current_command)
+            self.set_command(new_command)
+            return True
+        elif key == '\x1b[B':  # Flecha abajo
+            new_command = self.history.get_next()
+            self.set_command(new_command)
+            return True
+        elif key == '\x1b[C':  # Flecha derecha
+            if self.cursor_pos < len(self.current_command):
+                self.cursor_pos += 1
+                self.move_cursor_right()
+            return True
+        elif key == '\x1b[D':  # Flecha izquierda
+            if self.cursor_pos > 0:
+                self.cursor_pos -= 1
+                self.move_cursor_left()
+            return True
+        return False
+    
+    def set_command(self, command):
+        """Establece el comando actual y actualiza la pantalla"""
+        # Limpiar línea actual
+        print(f'\r{" " * (len(self.current_command) + 10)}\r', end='')
+        
+        self.current_command = command
+        self.cursor_pos = len(command)
+        
+        # Mostrar nuevo comando
+        print(f'{Colors.YELLOW}> {command}{Colors.END}', end='', flush=True)
+    
+    def add_char(self, char):
+        """Agrega un carácter en la posición del cursor"""
+        if char == '\x7f' or char == '\x08':  # Backspace
+            if self.cursor_pos > 0:
+                self.current_command = (self.current_command[:self.cursor_pos-1] + 
+                                      self.current_command[self.cursor_pos:])
+                self.cursor_pos -= 1
+                self.refresh_line()
+        elif char == '\n' or char == '\r':  # Enter
+            return 'enter'
+        elif char.isprintable():
+            self.current_command = (self.current_command[:self.cursor_pos] + char + 
+                                  self.current_command[self.cursor_pos:])
+            self.cursor_pos += 1
+            self.refresh_line()
+        return 'continue'
+    
+    def refresh_line(self):
+        """Refresca la línea de comando completa"""
+        print(f'\r{" " * 100}\r', end='')  # Limpiar línea
+        print(f'{Colors.YELLOW}> {self.current_command}{Colors.END}', end='', flush=True)
+        
+        # Mover cursor a la posición correcta
+        if self.cursor_pos < len(self.current_command):
+            move_back = len(self.current_command) - self.cursor_pos
+            print(f'\x1b[{move_back}D', end='', flush=True)
+    
+    def move_cursor_left(self):
+        """Mueve el cursor una posición a la izquierda"""
+        print('\x1b[D', end='', flush=True)
+    
+    def move_cursor_right(self):
+        """Mueve el cursor una posición a la derecha"""
+        print('\x1b[C', end='', flush=True)
+    
+    def get_command(self):
+        """Obtiene el comando actual y lo agrega al historial"""
+        command = self.current_command
+        if command.strip():
+            self.history.add_command(command)
+        self.current_command = ""
+        self.cursor_pos = 0
+        return command
+
 def get_timestamp():
     return datetime.now().strftime("%H:%M:%S")
+
+def get_char():
+    """Obtiene un carácter sin presionar Enter"""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(sys.stdin.fileno())
+        
+        # Verificar si hay entrada disponible
+        if select.select([sys.stdin], [], [], 0.01) == ([sys.stdin], [], []):
+            ch = sys.stdin.read(1)
+            
+            # Manejar secuencias de escape (flechas)
+            if ch == '\x1b':
+                # Leer el resto de la secuencia con timeout corto
+                if select.select([sys.stdin], [], [], 0.01) == ([sys.stdin], [], []):
+                    ch2 = sys.stdin.read(1)
+                    if ch2 == '[':
+                        if select.select([sys.stdin], [], [], 0.01) == ([sys.stdin], [], []):
+                            ch3 = sys.stdin.read(1)
+                            return f'\x1b[{ch3}'
+                return ch
+            return ch
+        return None
+    except:
+        return None
+    finally:
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except:
+            pass
 
 def detect_esp32_devices():
     """Detecta automáticamente los puertos ESP32 conectados"""
@@ -189,6 +356,37 @@ def monitor_device(port, device_name, color):
     except Exception as e:
         print(f"{Colors.RED}[{device_name}] Error: {e}{Colors.END}")
 
+def handle_software_reset(target, connections):
+    """Maneja resets por comando serie"""
+    def reset_device(connection, name):
+        if not connection:
+            print(f"{Colors.RED}❌ {name} no conectado - no se puede resetear{Colors.END}")
+            return False
+            
+        try:
+            print(f"{Colors.YELLOW}🔄 Enviando comando reset a {name}...{Colors.END}")
+            connection.write(b'reset\n')
+            time.sleep(0.5)  # Dar tiempo para que el comando sea procesado
+            print(f"{Colors.GREEN}✅ {name} comando reset enviado{Colors.END}")
+            return True
+            
+        except Exception as e:
+            print(f"{Colors.RED}❌ Error enviando reset a {name}: {e}{Colors.END}")
+            return False
+    
+    if target.lower() == 'server':
+        reset_device(connections.get('SERVER'), "ESP32-C3 (SERVER)")
+    elif target.lower() == 'client':
+        reset_device(connections.get('CLIENT'), "ESP32-WROOM (CLIENT)")
+    elif target.lower() == 'both':
+        print(f"{Colors.MAGENTA}🔄 Reseteando ambos dispositivos...{Colors.END}")
+        reset_device(connections.get('SERVER'), "ESP32-C3 (SERVER)")
+        time.sleep(1)
+        reset_device(connections.get('CLIENT'), "ESP32-WROOM (CLIENT)")
+        print(f"{Colors.GREEN}✅ Ambos dispositivos reseteados{Colors.END}")
+    else:
+        print(f"{Colors.RED}❌ Target inválido. Usa: server, client, o both{Colors.END}")
+
 def handle_physical_reset(target, detected_ports):
     """Maneja resets físicos usando señales DTR/RTS"""
     esp32c3_port = detected_ports.get("ESP32-C3")
@@ -238,73 +436,175 @@ def handle_physical_reset(target, detected_ports):
     else:
         print(f"{Colors.RED}❌ Target inválido. Usa: server, client, o both{Colors.END}")
 
-def send_commands(detected_ports):
-    """Permite enviar comandos a los dispositivos"""
+def show_help():
+    """Muestra la ayuda completa"""
+    print(f"\n{Colors.CYAN}=== COMANDOS CON HISTORIAL NAVEGABLE ==={Colors.END}")
+    print(f"{Colors.CYAN}Navegación:{Colors.END}")
+    print(f"{Colors.CYAN}  ↑ ↓     - Navegar historial de comandos{Colors.END}")
+    print(f"{Colors.CYAN}  ← →     - Mover cursor en línea actual{Colors.END}")
+    print(f"{Colors.CYAN}  Enter   - Ejecutar comando{Colors.END}")
+    print(f"{Colors.CYAN}  Backspace - Borrar carácter{Colors.END}")
+    print()
+    print(f"{Colors.CYAN}Comandos del sistema:{Colors.END}")
+    print(f"{Colors.CYAN}  help    - Mostrar esta ayuda{Colors.END}")
+    print(f"{Colors.CYAN}  history - Mostrar historial de comandos{Colors.END}")
+    print(f"{Colors.CYAN}  quit    - Salir del programa{Colors.END}")
+    print()
+    print(f"{Colors.CYAN}Comandos de dispositivos:{Colors.END}")
+    print(f"{Colors.CYAN}  server:comando  - Enviar a ESP32-C3 (Broker){Colors.END}")
+    print(f"{Colors.CYAN}  client:comando  - Enviar a ESP32-WROOM (Cliente){Colors.END}")
+    print(f"{Colors.CYAN}  reset:dispositivo - Reset físico{Colors.END}")
+    print()
+    print(f"{Colors.CYAN}Ejemplos útiles:{Colors.END}")
+    print(f"{Colors.CYAN}  server:server:list_fingerprints    - Listar huellas{Colors.END}")
+    print(f"{Colors.CYAN}  server:server:finger_cut:5         - Eliminar huella ID 5{Colors.END}")
+    print(f"{Colors.CYAN}  server:server:enroll:Juan          - Enrolar usuario Juan{Colors.END}")
+    print(f"{Colors.CYAN}  server:status                      - Estado del broker{Colors.END}")
+    print(f"{Colors.CYAN}  client:scan                        - Escanear huella{Colors.END}")
+    print(f"{Colors.CYAN}  reset:both                         - Reset ambos ESP32{Colors.END}")
+    print(f"{Colors.CYAN}======================================={Colors.END}")
+
+def show_history(history):
+    """Muestra el historial de comandos"""
+    print(f"\n{Colors.MAGENTA}=== HISTORIAL DE COMANDOS ==={Colors.END}")
+    if not history.history:
+        print(f"{Colors.YELLOW}No hay comandos en el historial{Colors.END}")
+    else:
+        for i, cmd in enumerate(history.history[-20:], 1):  # Últimos 20
+            print(f"{Colors.MAGENTA}{i:2d}. {cmd}{Colors.END}")
+        
+        total, current = history.get_stats()
+        print(f"\n{Colors.MAGENTA}Total: {total} comandos, Posición actual: {current}{Colors.END}")
+    print(f"{Colors.MAGENTA}============================{Colors.END}")
+
+def process_device_command(command, connections):
+    """Procesa un comando de dispositivo"""
+    try:
+        device, cmd = command.split(':', 1)
+        
+        if device.lower() == 'server' and 'SERVER' in connections:
+            # Para server, enviar el comando completo con prefijo server:
+            full_command = f"server:{cmd}"
+            connections['SERVER'].write((full_command + '\n').encode())
+            print(f"\n{Colors.CYAN}[ENVIADO a SERVER] {full_command}{Colors.END}")
+        elif device.lower() == 'client' and 'CLIENT' in connections:
+            connections['CLIENT'].write((cmd + '\n').encode())
+            print(f"\n{Colors.GREEN}[ENVIADO a CLIENT] {cmd}{Colors.END}")
+        elif device.lower() == 'reset':
+            handle_software_reset(cmd, connections)
+        else:
+            print(f"\n{Colors.RED}Dispositivo no encontrado: {device}{Colors.END}")
+            
+    except ValueError:
+        print(f"\n{Colors.RED}Formato inválido. Use: dispositivo:comando{Colors.END}")
+
+def send_commands_simple(detected_ports):
+    """Permite enviar comandos usando readline con historial simple"""
     esp32c3_port = detected_ports.get("ESP32-C3")
     esp32_wroom_port = detected_ports.get("ESP32-WROOM")
     
     connections = {}
+    command_history = []
     
     try:
+        # Configurar readline para historial
+        try:
+            import readline
+            # Configurar historial de readline
+            readline.set_history_length(100)
+            # Configurar completado básico
+            readline.parse_and_bind("tab: complete")
+        except ImportError:
+            print(f"{Colors.YELLOW}⚠️ readline no disponible - historial limitado{Colors.END}")
+        
         if esp32c3_port:
             connections['SERVER'] = serial.Serial(esp32c3_port, 115200, timeout=1)
         if esp32_wroom_port:
             connections['CLIENT'] = serial.Serial(esp32_wroom_port, 115200, timeout=1)
         
-        print(f"\n{Colors.YELLOW}📤 Comandos disponibles:{Colors.END}")
-        print(f"{Colors.CYAN}  server:comando  - Enviar a SERVER (Broker MQTT){Colors.END}")
-        print(f"{Colors.CYAN}  client:comando  - Enviar a CLIENT (Fingerprint){Colors.END}")
-        print(f"{Colors.CYAN}  help            - Ver ayuda{Colors.END}")
-        print(f"{Colors.CYAN}  quit            - Salir{Colors.END}\n")
+        print(f"\n{Colors.YELLOW}{Colors.BOLD}=== COMANDOS CON HISTORIAL SIMPLE ==={Colors.END}")
+        print(f"{Colors.YELLOW}📝 Historial con ↑↓ (si readline está disponible){Colors.END}")
+        print(f"{Colors.YELLOW}📝 Escribe 'dispositivo:comando' (ej: server:server:status){Colors.END}")
+        print(f"{Colors.YELLOW}📝 Dispositivos: server=Broker, client=Cliente{Colors.END}")
+        print(f"{Colors.YELLOW}📝 'help' = ayuda, 'history' = ver historial, 'quit' = salir{Colors.END}")
+        print(f"{Colors.YELLOW}====================================={Colors.END}\n")
         
         while True:
             try:
-                # Usar select para input no bloqueante en macOS
-                if sys.stdin in select.select([sys.stdin], [], [], 0.1)[0]:
-                    command = sys.stdin.readline().strip()
+                # Usar input() que funciona mejor con readline
+                command = input(f"{Colors.YELLOW}> {Colors.END}").strip()
+                
+                if not command:
+                    continue
                     
-                    if command.lower() == 'quit':
-                        break
-                    elif command.lower() == 'help':
-                        print(f"\n{Colors.CYAN}Comandos útiles:{Colors.END}")
-                        print(f"{Colors.CYAN}  server:status  - Estado del broker MQTT{Colors.END}")
-                        print(f"{Colors.CYAN}  server:reset   - Resetear ESP32-C3 (software){Colors.END}")
-                        print(f"{Colors.CYAN}  client:scan    - Escanear huella dactilar{Colors.END}")
-                        print(f"{Colors.CYAN}  client:help    - Ayuda del cliente{Colors.END}")
-                        print(f"{Colors.CYAN}  client:reset   - Resetear ESP32-WROOM (software){Colors.END}")
-                        print(f"{Colors.CYAN}  client:2       - Seleccionar red #2 (ejemplo){Colors.END}")
-                        print(f"{Colors.CYAN}  reset:server   - Reset físico ESP32-C3{Colors.END}")
-                        print(f"{Colors.CYAN}  reset:client   - Reset físico ESP32-WROOM{Colors.END}")
-                        print(f"{Colors.CYAN}  reset:both     - Reset físico ambos ESP32{Colors.END}\n")
-                    elif ':' in command:
-                        device, cmd = command.split(':', 1)
-                        
-                        if device.lower() == 'server' and 'SERVER' in connections:
-                            connections['SERVER'].write((command + '\n').encode())  # Envía comando completo
-                            print(f"{Colors.CYAN}[ENVIADO a SERVER] {command}{Colors.END}")
-                        elif device.lower() == 'client' and 'CLIENT' in connections:
-                            connections['CLIENT'].write((cmd + '\n').encode())
-                            print(f"{Colors.GREEN}[ENVIADO a CLIENT] {cmd}{Colors.END}")
-                        elif device.lower() == 'reset':
-                            handle_physical_reset(cmd, detected_ports)
-                        else:
-                            print(f"{Colors.RED}Dispositivo no válido. Usa: server:comando, client:comando o reset:dispositivo{Colors.END}")
-                    else:
-                        print(f"{Colors.YELLOW}Formato: dispositivo:comando (ej: server:status, client:scan, reset:both){Colors.END}")
-                        
+                # Agregar al historial local
+                if command not in command_history[-1:]:  # Evitar duplicados consecutivos
+                    command_history.append(command)
+                    if len(command_history) > 100:
+                        command_history.pop(0)
+                
+                if command.lower() == 'quit':
+                    break
+                elif command.lower() == 'help':
+                    show_help_simple()
+                elif command.lower() == 'history':
+                    show_history_simple(command_history)
+                elif ':' in command:
+                    process_device_command(command, connections)
+                else:
+                    print(f"{Colors.RED}Formato: dispositivo:comando (ej: server:server:status){Colors.END}")
+                    
             except KeyboardInterrupt:
+                print(f"\n{Colors.YELLOW}Use 'quit' para salir{Colors.END}")
+            except EOFError:
                 break
-            except:
-                continue
                 
     except Exception as e:
         print(f"{Colors.RED}Error con conexiones de comando: {e}{Colors.END}")
     finally:
-        for conn in connections.values():
-            try:
-                conn.close()
-            except:
-                pass
+        for key, conn in connections.items():
+            if key != 'detected_ports':
+                try:
+                    conn.close()
+                except:
+                    pass
+
+def show_help_simple():
+    """Muestra la ayuda simplificada"""
+    print(f"\n{Colors.CYAN}=== COMANDOS DISPONIBLES ==={Colors.END}")
+    print(f"{Colors.CYAN}Comandos del sistema:{Colors.END}")
+    print(f"{Colors.CYAN}  help    - Mostrar esta ayuda{Colors.END}")
+    print(f"{Colors.CYAN}  history - Mostrar historial de comandos{Colors.END}")
+    print(f"{Colors.CYAN}  quit    - Salir del programa{Colors.END}")
+    print()
+    print(f"{Colors.CYAN}Comandos de dispositivos:{Colors.END}")
+    print(f"{Colors.CYAN}  server:comando  - Enviar a ESP32-C3 (Broker){Colors.END}")
+    print(f"{Colors.CYAN}  client:comando  - Enviar a ESP32-WROOM (Cliente){Colors.END}")
+    print(f"{Colors.CYAN}  reset:dispositivo - Reset físico{Colors.END}")
+    print()
+    print(f"{Colors.CYAN}Ejemplos útiles:{Colors.END}")
+    print(f"{Colors.CYAN}  server:server:list_fingerprints    - Listar huellas{Colors.END}")
+    print(f"{Colors.CYAN}  server:server:finger_cut:5         - Eliminar huella ID 5{Colors.END}")
+    print(f"{Colors.CYAN}  server:server:enroll:Juan          - Enrolar usuario Juan{Colors.END}")
+    print(f"{Colors.CYAN}  server:status                      - Estado del broker{Colors.END}")
+    print(f"{Colors.CYAN}  server:modules                     - Módulos registrados{Colors.END}")
+    print(f"{Colors.CYAN}  client:scan                        - Escanear huella{Colors.END}")
+    print(f"{Colors.CYAN}  reset:both                         - Reset ambos ESP32{Colors.END}")
+    print(f"{Colors.CYAN}========================={Colors.END}")
+
+def show_history_simple(history):
+    """Muestra el historial de comandos simple"""
+    print(f"\n{Colors.MAGENTA}=== HISTORIAL DE COMANDOS ==={Colors.END}")
+    if not history:
+        print(f"{Colors.YELLOW}No hay comandos en el historial{Colors.END}")
+    else:
+        for i, cmd in enumerate(history[-20:], 1):  # Últimos 20
+            print(f"{Colors.MAGENTA}{i:2d}. {cmd}{Colors.END}")
+        print(f"\n{Colors.MAGENTA}Total: {len(history)} comandos{Colors.END}")
+    print(f"{Colors.MAGENTA}============================{Colors.END}")
+
+# Función principal que usa el sistema simple
+send_commands = send_commands_simple
 
 def main():
     print(f"{Colors.BOLD}{Colors.MAGENTA}")
