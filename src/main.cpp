@@ -351,6 +351,8 @@ void processMessage(int clientIndex, String message) {
     handleMACResponse(clientIndex, doc);
   } else if (type == "device_registration") {
     handleDeviceRegistration(clientIndex, doc);
+  } else if (type == "module_registration") {
+    handleModuleRegistration(clientIndex, doc);
   } else {
     // Reenviar mensaje a suscriptores
     forwardMessage(clientIndex, message);
@@ -368,10 +370,28 @@ void handleModuleRegistration(int clientIndex, JsonDocument& doc) {
   
   StaticJsonDocument<512> response;
   response["type"] = "registration_response";
+  response["response_type"] = "module";
   response["module_id"] = moduleId;
   
-  // Verificar autenticación
-  bool isAuthenticated = authenticateDevice(macAddress, apiKey);
+  // Para clientes ya conectados, buscar si ya está autenticado
+  bool isAuthenticated = false;
+  String realApiKey = "";
+  
+  // Buscar en dispositivos autorizados por MAC
+  for (auto& pair : authorizedDevices) {
+    AuthorizedDevice& device = pair.second;
+    if (device.isActive && device.macAddress == macAddress) {
+      isAuthenticated = true;
+      realApiKey = device.apiKey;
+      Serial.println("✅ Dispositivo ya autenticado, usando API key existente");
+      break;
+    }
+  }
+  
+  // Fallback: autenticar con la API key recibida
+  if (!isAuthenticated) {
+    isAuthenticated = authenticateDevice(macAddress, apiKey);
+  }
   
   // DEBUG: Si no está autenticado, agregar automáticamente para fingerprint_scanner
   if (!isAuthenticated && moduleType == "fingerprint_scanner") {
@@ -404,14 +424,19 @@ void handleModuleRegistration(int clientIndex, JsonDocument& doc) {
   
   // Verificar si el tipo de módulo está permitido
   bool typeAllowed = false;
+  Serial.println("🔍 Verificando tipo de módulo: " + moduleType);
+  Serial.println("🔍 Lista de tipos permitidos:");
   for (const String& allowedType : config.allowedModuleTypes) {
+    Serial.println("  - " + allowedType);
     if (moduleType == allowedType) {
       typeAllowed = true;
+      Serial.println("✅ Tipo encontrado: " + allowedType);
       break;
     }
   }
   
-
+  Serial.println("🔍 isAuthenticated: " + String(isAuthenticated ? "true" : "false"));
+  Serial.println("🔍 typeAllowed: " + String(typeAllowed ? "true" : "false"));
   
   if (isAuthenticated && typeAllowed) {
     // Registrar módulo
@@ -454,6 +479,7 @@ void handleModuleRegistration(int clientIndex, JsonDocument& doc) {
   
   String responseStr;
   serializeJson(response, responseStr);
+  Serial.println("📤 Enviando respuesta de módulo: " + responseStr);
   mqttClients[clientIndex].println(responseStr);
 }
 
@@ -570,6 +596,20 @@ void handleMACResponse(int clientIndex, JsonDocument& doc) {
     String requestStr;
     serializeJson(registrationRequest, requestStr);
     mqttClients[clientIndex].println(requestStr);
+  } else {
+    // Si ya está registrado, enviar confirmación directa
+    Serial.println("✅ Dispositivo ya registrado - enviando confirmación");
+    
+    StaticJsonDocument<200> confirmation;
+    confirmation["type"] = "registration_response";
+    confirmation["response_type"] = "device";
+    confirmation["status"] = "success";
+    confirmation["message"] = "Dispositivo ya autenticado";
+    confirmation["module_id"] = moduleId;
+    
+    String confirmStr;
+    serializeJson(confirmation, confirmStr);
+    mqttClients[clientIndex].println(confirmStr);
   }
 }
 
@@ -587,6 +627,7 @@ void handleDeviceRegistration(int clientIndex, JsonDocument& doc) {
     
     StaticJsonDocument<200> response;
     response["type"] = "registration_response";
+    response["response_type"] = "device";
     response["status"] = "error";
     response["message"] = "Formato de código inválido. Use ID:MAC:PASSWORD";
     
@@ -615,6 +656,7 @@ void handleDeviceRegistration(int clientIndex, JsonDocument& doc) {
     
     StaticJsonDocument<200> response;
     response["type"] = "registration_response";
+    response["response_type"] = "device";
     response["status"] = "error";
     response["message"] = "Contraseña de registro incorrecta";
     
@@ -647,6 +689,7 @@ void handleDeviceRegistration(int clientIndex, JsonDocument& doc) {
       
       StaticJsonDocument<200> response;
       response["type"] = "registration_response";
+      response["response_type"] = "device";
       response["status"] = "error";
       response["message"] = "ID de dispositivo no válido";
       
@@ -673,6 +716,7 @@ void handleDeviceRegistration(int clientIndex, JsonDocument& doc) {
   // Responder con éxito
   StaticJsonDocument<300> response;
   response["type"] = "registration_response";
+  response["response_type"] = "device";
   response["status"] = "success";
   response["message"] = "Dispositivo registrado exitosamente";
   response["device_id"] = deviceId;
@@ -1139,11 +1183,11 @@ void sendCommandToModule(const String& moduleId, const String& command) {
 void requestMACFromFingerprintScanners() {
   Serial.println("🔍 Consultando MAC de FingerprintScanners conectados...");
   
-  // Buscar todos los módulos de tipo FingerprintScanner
+  // Buscar todos los módulos de tipo fingerprint_scanner
   for (auto& pair : registeredModules) {
     ModuleInfo& module = pair.second;
     
-    if (module.moduleType == "FingerprintScanner" && module.isAuthenticated) {
+    if (module.moduleType == "fingerprint_scanner" && module.isAuthenticated) {
       Serial.println("📡 Solicitando MAC a: " + pair.first);
       sendCommandToModule(pair.first, "server:request_mac");
     }
