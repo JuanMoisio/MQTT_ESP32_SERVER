@@ -135,12 +135,8 @@ void setup() {
   
   Serial.println();
   Serial.println("==============================================");
-  Serial.println("🚀 INICIANDO BROKER MQTT ESP32-C3 SuperMini");
+  Serial.println("🚀 Iniciando Broker MQTT");
   Serial.println("==============================================");
-  Serial.print("💾 RAM libre: ");
-  Serial.println(ESP.getFreeHeap());
-  Serial.print("🔧 Versión ESP-IDF: ");
-  Serial.println(ESP.getSdkVersion());
   
   // Inicializar tipos de módulos permitidos
   for (int i = 0; i < NUM_ALLOWED_TYPES; i++) {
@@ -151,7 +147,7 @@ void setup() {
   setupWiFi();
   
   // SPIFFS no necesario - HTML embebido
-  Serial.println("✅ Sistema web configurado (HTML embebido)");
+  // Serial.println("✅ Sistema web configurado (HTML embebido)");
   
   // Cargar dispositivos autorizados
   loadAuthorizedDevices();
@@ -167,7 +163,7 @@ void setup() {
   // Configurar sistema
   setupSystem();
   
-  Serial.println("Sistema listo. Esperando conexiones...");
+  Serial.println("✅ Sistema listo");
 }
 
 void loop() {
@@ -190,27 +186,19 @@ void loop() {
 }
 
 void setupWiFi() {
-  Serial.println("Configurando ESP32-C3 como Access Point...");
-  
   // Configurar como Access Point
   WiFi.mode(ENABLE_STATION_MODE ? WIFI_AP_STA : WIFI_AP);
   
   // Configurar IP estática para el AP
   if (!WiFi.softAPConfig(ap_ip, ap_gateway, ap_subnet)) {
-    Serial.println("Error configurando IP del AP");
+    Serial.println("❌ Error configurando IP del AP");
   }
   
   // Iniciar Access Point
   if (WiFi.softAP(ap_ssid, ap_password)) {
-    Serial.println("✅ Access Point iniciado exitosamente!");
-    Serial.print("📶 SSID: ");
-    Serial.println(ap_ssid);
-    Serial.print("🔑 Password: ");
-    Serial.println(ap_password);
+    Serial.println("✅ Access Point iniciado");
     Serial.print("🌐 IP del broker: ");
     Serial.println(WiFi.softAPIP());
-    Serial.print("📡 MAC Address: ");
-    Serial.println(WiFi.softAPmacAddress());
   } else {
     Serial.println("❌ Error iniciando Access Point");
     return;
@@ -424,19 +412,19 @@ void handleModuleRegistration(int clientIndex, JsonDocument& doc) {
   
   // Verificar si el tipo de módulo está permitido
   bool typeAllowed = false;
-  Serial.println("🔍 Verificando tipo de módulo: " + moduleType);
-  Serial.println("🔍 Lista de tipos permitidos:");
+  // Serial.println("🔍 Verificando tipo de módulo: " + moduleType);
+  // Serial.println("🔍 Lista de tipos permitidos:");
   for (const String& allowedType : config.allowedModuleTypes) {
-    Serial.println("  - " + allowedType);
+    // Serial.println("  - " + allowedType);
     if (moduleType == allowedType) {
       typeAllowed = true;
-      Serial.println("✅ Tipo encontrado: " + allowedType);
+      // Serial.println("✅ Tipo encontrado: " + allowedType);
       break;
     }
   }
   
-  Serial.println("🔍 isAuthenticated: " + String(isAuthenticated ? "true" : "false"));
-  Serial.println("🔍 typeAllowed: " + String(typeAllowed ? "true" : "false"));
+  // Serial.println("🔍 isAuthenticated: " + String(isAuthenticated ? "true" : "false"));
+  // Serial.println("🔍 typeAllowed: " + String(typeAllowed ? "true" : "false"));
   
   if (isAuthenticated && typeAllowed) {
     // Registrar módulo
@@ -560,7 +548,7 @@ void handleMACResponse(int clientIndex, JsonDocument& doc) {
   String moduleId = doc["module_id"];
   String macAddress = doc["mac_address"];
   
-  Serial.println("📡 Respuesta MAC recibida");
+  // Serial.println("📡 Respuesta MAC recibida");
   
   // Almacenar la MAC recibida
   lastRequestedMAC = macAddress;
@@ -584,8 +572,8 @@ void handleMACResponse(int clientIndex, JsonDocument& doc) {
   
   // Si no está registrado, solicitar registro
   if (!isRegistered) {
-    Serial.println("⚠️ Dispositivo no registrado - solicitando registro");
-    Serial.println("📤 Enviando solicitud de registro...");
+    // Serial.println("⚠️ Dispositivo no registrado - solicitando registro");
+    // Serial.println("📤 Enviando solicitud de registro...");
     
     StaticJsonDocument<200> registrationRequest;
     registrationRequest["type"] = "registration_required";
@@ -616,7 +604,7 @@ void handleMACResponse(int clientIndex, JsonDocument& doc) {
 void handleDeviceRegistration(int clientIndex, JsonDocument& doc) {
   String verificationCode = doc["verification_code"];
   
-  Serial.println("🔐 Código de verificación recibido");
+  // Serial.println("🔐 Código de verificación recibido");
   
   // Parsear el código formato ID:MAC:PASSWORD
   int firstColon = verificationCode.indexOf(':');
@@ -1399,7 +1387,7 @@ void loadAuthorizedDevices() {
   
   authorizedDevices[testDevice.macAddress] = testDevice;
   
-  Serial.println("📱 Dispositivo de prueba agregado");
+  // Serial.println("📱 Dispositivo de prueba agregado");
 }
 
 void saveAuthorizedDevices() {
