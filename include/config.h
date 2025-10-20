@@ -40,6 +40,7 @@ const char* ALLOWED_MODULE_TYPES[] = {
   "actuador",
   "display",
   "rfid",
+  "rfid_reader",
   "camara",
   "fingerprint_scanner"
 };

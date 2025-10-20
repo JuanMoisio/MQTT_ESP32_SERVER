@@ -199,52 +199,37 @@ def get_char():
 def identify_device_type(port):
     """Identifica qué tipo de dispositivo está conectado al puerto"""
     try:
-        ser = serial.Serial(port, 115200, timeout=1)  # Timeout más corto
-        print(f"   📡 Puerto abierto, esperando datos...")
+        ser = serial.Serial(port, 115200, timeout=3)
+        time.sleep(2)  # Esperar estabilización
         
         lines_read = 0
         device_type = 'unknown'
-        start_time = time.time()
-        max_wait_time = 5  # Máximo 5 segundos de espera total
         
         # Enviar un comando de reset suave para obtener mensajes de inicio
         ser.write(b'\r\n')
-        time.sleep(0.5)  # Espera más corta
+        time.sleep(1)
         
-        while lines_read < 10 and (time.time() - start_time) < max_wait_time:
+        while lines_read < 20:  # Leer más líneas para mejor identificación
             if ser.in_waiting > 0:
                 try:
                     line = ser.readline().decode('utf-8', errors='ignore').strip()
-                    if line:  # Solo contar líneas no vacías
-                        lines_read += 1
-                        print(f"   📤 Línea {lines_read}: {line[:50]}...")  # Mostrar primeros 50 chars
+                    lines_read += 1
+                    
+                    # Identificar por mensajes específicos de inicio
+                    if any(keyword in line for keyword in ['BROKER MQTT', 'Access Point iniciado', 'Broker MQTT']):
+                        device_type = 'broker'
+                        break
+                    elif any(keyword in line for keyword in ['HUELLA DACTILAR', 'FINGERPRINT', 'fingerprint_scanner']):
+                        device_type = 'fingerprint'
+                        break
+                    elif any(keyword in line for keyword in ['LECTOR RFID', 'RFID', 'rfid_reader']):
+                        device_type = 'rfid'
+                        break
                         
-                        # Identificar por mensajes específicos de inicio
-                        if any(keyword in line for keyword in ['BROKER MQTT', 'Access Point iniciado', 'Broker MQTT']):
-                            device_type = 'broker'
-                            print(f"   ✅ Identificado como BROKER")
-                            break
-                        elif any(keyword in line for keyword in ['HUELLA DACTILAR', 'FINGERPRINT', 'fingerprint_scanner']):
-                            device_type = 'fingerprint'
-                            print(f"   ✅ Identificado como FINGERPRINT")
-                            break
-                        elif any(keyword in line for keyword in ['LECTOR RFID', 'RFID', 'rfid_reader']):
-                            device_type = 'rfid'
-                            print(f"   ✅ Identificado como RFID")
-                            break
-                            
                 except UnicodeDecodeError:
                     continue
             else:
                 time.sleep(0.1)
-        
-        elapsed_time = time.time() - start_time
-        print(f"   ⏱️ Tiempo transcurrido: {elapsed_time:.1f}s, Líneas leídas: {lines_read}")
-        
-        if device_type == 'unknown' and lines_read == 0:
-            print(f"   ⚠️ No se recibieron datos del dispositivo")
-        elif device_type == 'unknown':
-            print(f"   ❓ Dispositivo no identificado (recibió {lines_read} líneas)")
         
         ser.close()
         return device_type
@@ -286,57 +271,39 @@ def detect_esp32_devices():
     
     for port_name in esp32_ports:
         print(f"   🔍 Identificando dispositivo en {port_name}...")
-        try:
-            device_type = identify_device_type(port_name)
-            
-            if device_type == 'broker':
-                devices["ESP32-C3"] = port_name
-                print(f"{Colors.CYAN}   ✅ BROKER (ESP32-C3) detectado: {port_name}{Colors.END}")
-            elif device_type == 'fingerprint':
-                devices["ESP32-WROOM"] = port_name
-                print(f"{Colors.GREEN}   ✅ FINGERPRINT (ESP32-WROOM) detectado: {port_name}{Colors.END}")
-            elif device_type == 'rfid':
-                if "ESP32-WROOM" not in devices:
-                    devices["ESP32-WROOM"] = port_name
-                    print(f"{Colors.MAGENTA}   ✅ RFID (ESP32-WROOM) detectado: {port_name}{Colors.END}")
-                else:
-                    devices["ESP32-RFID"] = port_name
-                    print(f"{Colors.MAGENTA}   ✅ RFID adicional detectado: {port_name}{Colors.END}")
-            else:
-                # Si no se puede identificar, asignar por patrón de puerto
-                print(f"   ❓ Dispositivo no identificado, usando heurística...")
-                if 'usbmodem' in port_name and "ESP32-C3" not in devices:
-                    devices["ESP32-C3"] = port_name
-                    print(f"{Colors.CYAN}   🔶 BROKER (ESP32-C3) por puerto: {port_name}{Colors.END}")
-                elif 'usbserial' in port_name:
-                    if "ESP32-WROOM" not in devices:
-                        devices["ESP32-WROOM"] = port_name
-                        print(f"{Colors.GREEN}   🔶 FINGERPRINT (ESP32-WROOM) por puerto: {port_name}{Colors.END}")
-                    else:
-                        # Dispositivo adicional
-                        key = f"ESP32-DEVICE-{device_counter}"
-                        devices[key] = port_name
-                        print(f"{Colors.YELLOW}   🔶 Dispositivo adicional: {port_name}{Colors.END}")
-                        device_counter += 1
-        except Exception as e:
-            print(f"{Colors.RED}   ❌ Error identificando {port_name}: {e}{Colors.END}")
-            # Aun así, intentar asignar por patrón
-            if 'usbmodem' in port_name and "ESP32-C3" not in devices:
-                devices["ESP32-C3"] = port_name
-                print(f"{Colors.YELLOW}   🔶 BROKER (ESP32-C3) por puerto (fallback): {port_name}{Colors.END}")
-            elif 'usbserial' in port_name and "ESP32-WROOM" not in devices:
-                devices["ESP32-WROOM"] = port_name
-                print(f"{Colors.YELLOW}   🔶 FINGERPRINT (ESP32-WROOM) por puerto (fallback): {port_name}{Colors.END}")
+        device_type = identify_device_type(port_name)
+        
+        if device_type == 'broker':
+            devices["BROKER"] = port_name
+            print(f"{Colors.CYAN}   ✅ BROKER (ESP32-C3) detectado: {port_name}{Colors.END}")
+        elif device_type == 'fingerprint':
+            devices["FINGERPRINT"] = port_name
+            print(f"{Colors.GREEN}   ✅ FINGERPRINT (ESP32-WROOM) detectado: {port_name}{Colors.END}")
+        elif device_type == 'rfid':
+            devices["RFID"] = port_name
+            print(f"{Colors.MAGENTA}   ✅ RFID (ESP32-WROOM) detectado: {port_name}{Colors.END}")
+        else:
+            # Si no se puede identificar, asignar por patrón de puerto
+            if 'usbmodem' in port_name and "BROKER" not in devices:
+                devices["BROKER"] = port_name
+                print(f"{Colors.CYAN}   🔶 BROKER (ESP32-C3): {port_name}{Colors.END}")
+            elif 'usbserial' in port_name:
+                if "FINGERPRINT" not in devices:
+                    devices["FINGERPRINT"] = port_name
+                    print(f"{Colors.GREEN}   🔶 FINGERPRINT (ESP32-WROOM): {port_name}{Colors.END}")
+                elif "RFID" not in devices:
+                    devices["RFID"] = port_name
+                    print(f"{Colors.MAGENTA}   🏷️ RFID (ESP32-WROOM): {port_name}{Colors.END}")
     
-    print(f"{Colors.YELLOW}⚡ Asignación final de dispositivos:{Colors.END}")
+    print(f"{Colors.YELLOW}⚠️ Asignando puertos por tipo de hardware...{Colors.END}")
     # Mostrar resumen final
     for device_name, port in devices.items():
-        if "ESP32-C3" in device_name:
-            print(f"{Colors.CYAN}   📡 {device_name} (BROKER): {port}{Colors.END}")
-        elif "ESP32-WROOM" in device_name:
-            print(f"{Colors.GREEN}   🔶 {device_name} (CLIENT): {port}{Colors.END}")
-        else:
-            print(f"{Colors.MAGENTA}   🔌 {device_name}: {port}{Colors.END}")
+        if device_name == "BROKER":
+            print(f"{Colors.CYAN}   � {device_name} (ESP32-C3): {port}{Colors.END}")
+        elif device_name == "FINGERPRINT":
+            print(f"{Colors.GREEN}   🔶 {device_name} (ESP32-WROOM): {port}{Colors.END}")
+        elif device_name == "RFID":
+            print(f"{Colors.MAGENTA}   🏷️ {device_name} (ESP32-WROOM): {port}{Colors.END}")
     
     return devices
 

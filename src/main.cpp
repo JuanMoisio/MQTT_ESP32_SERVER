@@ -24,6 +24,9 @@ void handlePublish(int clientIndex, JsonDocument& doc);
 void handleSubscribe(int clientIndex, JsonDocument& doc);
 void handleConfiguration(int clientIndex, JsonDocument& doc);
 void handleMACResponse(int clientIndex, JsonDocument& doc);
+void handleDeviceInfoResponse(int clientIndex, JsonDocument& doc);
+void handleDeviceScanResponse(int clientIndex, JsonDocument& doc);
+void addToScannedDevices(const String& macAddress, const String& deviceType, const String& moduleId);
 void handleDeviceRegistration(int clientIndex, JsonDocument& doc);
 void forwardMessage(int senderIndex, String message);
 void forwardToSubscribers(String topic, String payload);
@@ -42,6 +45,7 @@ void handleRemoveDevice();
 bool authenticateDevice(const String& macAddress, const String& apiKey);
 void loadAuthorizedDevices();
 void saveAuthorizedDevices();
+void cleanupTestDevices();
 
 // Configuración WiFi Access Point (desde config.h)
 const char* ap_ssid = AP_SSID;
@@ -78,6 +82,7 @@ const int DEVICE_ID_FINGERPRINT = 20;
 const int DEVICE_ID_SLAVE_1 = 21;
 const int DEVICE_ID_SLAVE_2 = 22;
 const int DEVICE_ID_SLAVE_3 = 23;
+const int DEVICE_ID_RFID = 30;
 
 // Base de datos de módulos registrados
 struct ModuleInfo {
@@ -120,7 +125,22 @@ SystemConfig config = {
 
 // Variables para consulta de MAC
 String lastRequestedMAC = "";
+String lastRequestedDeviceType = "";
 unsigned long macRequestTime = 0;
+
+// Variable para controlar modo scan
+bool isScanMode = false;
+
+// Estructura para dispositivos escaneados
+struct ScannedDevice {
+  String macAddress;
+  String deviceType;
+  String moduleId;
+  unsigned long timestamp;
+};
+
+// Lista de dispositivos escaneados
+std::vector<ScannedDevice> scannedDevices;
 
 void setup() {
   // Inicializar Serial para ESP32-C3 con USB CDC
@@ -151,6 +171,11 @@ void setup() {
   
   // Cargar dispositivos autorizados
   loadAuthorizedDevices();
+  
+  // Limpiar dispositivos de prueba al iniciar
+  cleanupTestDevices();
+  
+  Serial.println("� Dispositivos registrados: " + String(authorizedDevices.size()));
   
   // Configurar servidor web
   setupWebServer();
@@ -337,6 +362,12 @@ void processMessage(int clientIndex, String message) {
     handleConfiguration(clientIndex, doc);
   } else if (type == "mac_response") {
     handleMACResponse(clientIndex, doc);
+  } else if (type == "mac_response_unregistered") {
+    handleMACResponse(clientIndex, doc);
+  } else if (type == "device_info_response") {
+    handleDeviceInfoResponse(clientIndex, doc);
+  } else if (type == "device_scan_response") {
+    handleDeviceScanResponse(clientIndex, doc);
   } else if (type == "device_registration") {
     handleDeviceRegistration(clientIndex, doc);
   } else if (type == "module_registration") {
@@ -381,33 +412,18 @@ void handleModuleRegistration(int clientIndex, JsonDocument& doc) {
     isAuthenticated = authenticateDevice(macAddress, apiKey);
   }
   
-  // DEBUG: Si no está autenticado, agregar automáticamente para fingerprint_scanner
-  if (!isAuthenticated && moduleType == "fingerprint_scanner") {
-    Serial.println("🔧 Auto-registrando dispositivo...");
+  // AUTO-REGISTRO DESHABILITADO: Los dispositivos deben registrarse manualmente
+  // Si no está autenticado, rechazar el registro
+  if (!isAuthenticated) {
+    Serial.println("❌ Dispositivo no autorizado - MAC: " + macAddress);
     
-    AuthorizedDevice newDevice;
-    newDevice.macAddress = macAddress;
-    newDevice.deviceType = "fingerprint";
-    newDevice.apiKey = generateAPIKey();
-    newDevice.description = "Scanner Auto-registrado";
-    newDevice.isActive = true;
-    newDevice.lastSeen = millis();
-    newDevice.currentIP = mqttClients[clientIndex].remoteIP().toString();
+    response["status"] = "error";
+    response["message"] = "Dispositivo no autorizado. Debe registrarse manualmente desde el panel de administración.";
     
-    authorizedDevices[macAddress] = newDevice;
-    
-    Serial.println("✅ Dispositivo auto-registrado");
-    
-    // Actualizar el cliente para que use el nuevo API key
-    isAuthenticated = true;
-    
-    // Enviar el API key correcto al cliente para futuras conexiones
-    StaticJsonDocument<200> apiKeyMsg;
-    apiKeyMsg["type"] = "api_key_update";
-    apiKeyMsg["api_key"] = newDevice.apiKey;
-    String apiKeyStr;
-    serializeJson(apiKeyMsg, apiKeyStr);
-    mqttClients[clientIndex].println(apiKeyStr);
+    String responseStr;
+    serializeJson(response, responseStr);
+    mqttClients[clientIndex].println(responseStr);
+    return;
   }
   
   // Verificar si el tipo de módulo está permitido
@@ -547,58 +563,168 @@ void handleConfiguration(int clientIndex, JsonDocument& doc) {
 void handleMACResponse(int clientIndex, JsonDocument& doc) {
   String moduleId = doc["module_id"];
   String macAddress = doc["mac_address"];
+  String deviceType = doc["device_type"]; // Nuevo: tipo de dispositivo
   
-  // Serial.println("📡 Respuesta MAC recibida");
+  Serial.println("📡 Respuesta MAC recibida: " + macAddress + " (Tipo: " + deviceType + ") - ModuleID: " + moduleId);
+  Serial.println("🔍 Modo scan activo: " + String(isScanMode ? "SÍ" : "NO"));
   
-  // Almacenar la MAC recibida
-  lastRequestedMAC = macAddress;
+  // Mapear tipos de dispositivo para compatibilidad con web
+  String webDeviceType = deviceType;
+  if (deviceType == "rfid_reader") {
+    webDeviceType = "rfid";
+  } else if (deviceType == "fingerprint_scanner") {
+    webDeviceType = "fingerprint";
+  }
   
-  // Verificar si el dispositivo está registrado
-  bool isRegistered = false;
-  if (registeredModules.find(moduleId) != registeredModules.end()) {
-    registeredModules[moduleId].macAddress = macAddress;
-    Serial.println("✅ MAC actualizada para módulo registrado");
-    isRegistered = true;
-  } else {
-    // Verificar si la MAC está en dispositivos autorizados
+  // SIEMPRE agregar a la lista de scan (para funcionalidad scan completo)
+  addToScannedDevices(macAddress, webDeviceType, moduleId);
+  
+  // Verificar si el dispositivo YA está registrado
+  bool isAlreadyRegistered = false;
+  
+  // Verificar en módulos registrados
+  for (auto& pair : registeredModules) {
+    if (pair.second.macAddress == macAddress) {
+      Serial.println("❌ MAC " + macAddress + " ya está registrada en módulos");
+      isAlreadyRegistered = true;
+      break;
+    }
+  }
+  
+  // Verificar en dispositivos autorizados
+  if (!isAlreadyRegistered) {
     for (auto& pair : authorizedDevices) {
       if (pair.second.macAddress == macAddress) {
-        Serial.println("✅ MAC encontrada en dispositivos autorizados");
-        isRegistered = true;
+        Serial.println("❌ MAC " + macAddress + " ya está registrada en dispositivos autorizados");
+        isAlreadyRegistered = true;
         break;
       }
     }
   }
   
-  // Si no está registrado, solicitar registro
-  if (!isRegistered) {
-    // Serial.println("⚠️ Dispositivo no registrado - solicitando registro");
-    // Serial.println("📤 Enviando solicitud de registro...");
+  // Solo aceptar MACs de dispositivos NO registrados para el sistema de consulta manual
+  if (!isAlreadyRegistered) {
+    Serial.println("✅ MAC " + macAddress + " (" + deviceType + ") NO está registrada - disponible para registro");
     
-    StaticJsonDocument<200> registrationRequest;
-    registrationRequest["type"] = "registration_required";
-    registrationRequest["message"] = "Dispositivo no registrado. Envía código de verificación.";
-    registrationRequest["format"] = "ID:MAC:PASSWORD";
-    registrationRequest["example"] = "20:" + macAddress + ":" + REGISTRATION_PASSWORD;
+    // SIEMPRE guardar MAC y tipo de dispositivos no registrados (para registro manual)
+    lastRequestedMAC = macAddress;
+    lastRequestedDeviceType = webDeviceType;
+    macRequestTime = millis(); // Actualizar timestamp
     
-    String requestStr;
-    serializeJson(registrationRequest, requestStr);
-    mqttClients[clientIndex].println(requestStr);
+    Serial.println("💾 Guardado para consulta web: " + macAddress + " (" + webDeviceType + ")");
+    
+    // Enviar respuesta temporal para que el dispositivo no se quede esperando
+    StaticJsonDocument<200> tempResponse;
+    tempResponse["type"] = "mac_query_received";
+    tempResponse["message"] = "MAC recibida - registro manual requerido";
+    
+    String tempResponseStr;
+    serializeJson(tempResponse, tempResponseStr);
+    mqttClients[clientIndex].println(tempResponseStr);
+    
   } else {
-    // Si ya está registrado, enviar confirmación directa
-    Serial.println("✅ Dispositivo ya registrado - enviando confirmación");
+    Serial.println("⚠️ MAC " + macAddress + " ya está registrada - ignorando para consulta manual");
     
-    StaticJsonDocument<200> confirmation;
-    confirmation["type"] = "registration_response";
-    confirmation["response_type"] = "device";
-    confirmation["status"] = "success";
-    confirmation["message"] = "Dispositivo ya autenticado";
-    confirmation["module_id"] = moduleId;
+    // Responder al dispositivo que ya está registrado
+    StaticJsonDocument<200> response;
+    response["type"] = "already_registered";
+    response["message"] = "Dispositivo ya está registrado en el sistema";
     
-    String confirmStr;
-    serializeJson(confirmation, confirmStr);
-    mqttClients[clientIndex].println(confirmStr);
+    String responseStr;
+    serializeJson(response, responseStr);
+    mqttClients[clientIndex].println(responseStr);
   }
+}
+
+void handleDeviceInfoResponse(int clientIndex, JsonDocument& doc) {
+  String moduleId = doc["module_id"];
+  String macAddress = doc["mac_address"];
+  String deviceType = doc["device_type"];
+  
+  Serial.println("📡 Respuesta de info de dispositivo: " + macAddress + " (Tipo: " + deviceType + ") - ModuleID: " + moduleId);
+  
+  // Mapear tipos de dispositivo para compatibilidad con web
+  String webDeviceType = deviceType;
+  if (deviceType == "rfid_reader") {
+    webDeviceType = "rfid";
+  } else if (deviceType == "fingerprint_scanner") {
+    webDeviceType = "fingerprint";
+  }
+  
+  // Verificar si el dispositivo ya está registrado
+  bool isAlreadyRegistered = (authorizedDevices.find(macAddress) != authorizedDevices.end());
+  
+  // Agregar a la lista de dispositivos escaneados
+  addToScannedDevices(macAddress, webDeviceType, moduleId);
+  
+  // Solo guardar en variables globales si NO está registrado (para registro manual)
+  if (!isAlreadyRegistered) {
+    Serial.println("💾 Dispositivo NO registrado detectado - disponible para registro manual");
+    lastRequestedMAC = macAddress;
+    lastRequestedDeviceType = webDeviceType;
+    macRequestTime = millis();
+  } else {
+    Serial.println("✅ Dispositivo ya registrado: " + macAddress);
+  }
+  
+  // Confirmar recepción al dispositivo
+  StaticJsonDocument<200> ack;
+  ack["type"] = "device_info_ack";
+  ack["message"] = "Información recibida correctamente";
+  ack["is_registered"] = isAlreadyRegistered;
+  
+  String ackStr;
+  serializeJson(ack, ackStr);
+  mqttClients[clientIndex].println(ackStr);
+}
+
+void addToScannedDevices(const String& macAddress, const String& deviceType, const String& moduleId) {
+  Serial.println("🔍 addToScannedDevices llamada: " + macAddress + " (" + deviceType + ") - ID: " + moduleId);
+  
+  // Buscar si ya existe en la lista (evitar duplicados)
+  bool alreadyExists = false;
+  for (auto& existing : scannedDevices) {
+    if (existing.macAddress == macAddress) {
+      // Actualizar información existente
+      existing.deviceType = deviceType;
+      existing.moduleId = moduleId;
+      existing.timestamp = millis();
+      alreadyExists = true;
+      Serial.println("🔄 Dispositivo actualizado en lista de scan: " + macAddress);
+      break;
+    }
+  }
+  
+  // Si no existe, agregar nuevo
+  if (!alreadyExists) {
+    ScannedDevice newDevice;
+    newDevice.macAddress = macAddress;
+    newDevice.deviceType = deviceType;
+    newDevice.moduleId = moduleId;
+    newDevice.timestamp = millis();
+    
+    scannedDevices.push_back(newDevice);
+    Serial.println("✅ Dispositivo agregado a lista de scan: " + macAddress + " (" + deviceType + ") - Total: " + String(scannedDevices.size()));
+  }
+}
+
+void handleDeviceScanResponse(int clientIndex, JsonDocument& doc) {
+  String moduleId = doc["module_id"];
+  String macAddress = doc["mac_address"];
+  String deviceType = doc["device_type"];
+  
+  Serial.println("📡 Respuesta de scan recibida: " + macAddress + " (" + deviceType + ") - ID: " + moduleId);
+  
+  // Mapear tipos de dispositivo para compatibilidad con web
+  String webDeviceType = deviceType;
+  if (deviceType == "rfid_reader") {
+    webDeviceType = "rfid";
+  } else if (deviceType == "fingerprint_scanner") {
+    webDeviceType = "fingerprint";
+  }
+  
+  // Usar la función helper para agregar/actualizar
+  addToScannedDevices(macAddress, webDeviceType, moduleId);
 }
 
 void handleDeviceRegistration(int clientIndex, JsonDocument& doc) {
@@ -661,6 +787,10 @@ void handleDeviceRegistration(int clientIndex, JsonDocument& doc) {
     case DEVICE_ID_FINGERPRINT:
       deviceType = "fingerprint";
       moduleType = "fingerprint_scanner";
+      break;
+    case DEVICE_ID_RFID:
+      deviceType = "rfid";
+      moduleType = "rfid_reader";
       break;
     case DEVICE_ID_SLAVE_1:
     case DEVICE_ID_SLAVE_2:
@@ -795,6 +925,27 @@ void processSystemCommands() {
       Serial.println("🔄 Reiniciando ESP32-C3 en 3 segundos...");
       delay(3000);
       ESP.restart();
+    } else if (command.startsWith("register_rfid")) {
+      // Comando manual para registrar RFID: register_rfid
+      String macAddress = "08:D1:F9:D2:A3:D8"; // MAC del RFID conocida
+      
+      // Crear dispositivo autorizado
+      AuthorizedDevice newDevice;
+      newDevice.macAddress = macAddress;
+      newDevice.deviceType = "rfid";
+      newDevice.apiKey = generateAPIKey();
+      newDevice.description = "RFID registrado manualmente";
+      newDevice.isActive = true;
+      newDevice.lastSeen = millis();
+      newDevice.currentIP = ""; // Se actualizará cuando se conecte
+      
+      // Agregar al mapa de dispositivos autorizados
+      authorizedDevices[macAddress] = newDevice;
+      
+      saveAuthorizedDevices();
+      Serial.println("✅ RFID registrado manualmente: " + macAddress);
+      Serial.println("📱 Device Type: rfid, API Key: " + newDevice.apiKey);
+      
     } else if (command.startsWith("server:")) {
       // Comandos cortos del servidor
       String shortCommand = command.substring(7); // Remover "server:"
@@ -1169,21 +1320,56 @@ void sendCommandToModule(const String& moduleId, const String& command) {
 }
 
 void requestMACFromFingerprintScanners() {
-  Serial.println("🔍 Consultando MAC de FingerprintScanners conectados...");
+  Serial.println("🔍 DISCOVERY: Buscando dispositivos en la red local...");
   
-  // Buscar todos los módulos de tipo fingerprint_scanner
-  for (auto& pair : registeredModules) {
-    ModuleInfo& module = pair.second;
-    
-    if (module.moduleType == "fingerprint_scanner" && module.isAuthenticated) {
-      Serial.println("📡 Solicitando MAC a: " + pair.first);
-      sendCommandToModule(pair.first, "server:request_mac");
+  // Limpiar información anterior para nueva búsqueda
+  lastRequestedMAC = "";
+  lastRequestedDeviceType = "";
+  macRequestTime = 0;
+  
+  // Preparar mensaje de discovery
+  StaticJsonDocument<400> discoveryMsg;
+  discoveryMsg["type"] = "device_discovery";
+  discoveryMsg["action"] = "request_info";
+  discoveryMsg["message"] = "DISCOVERY: Responde con device_info_response incluyendo tu MAC, device_type y module_id";
+  discoveryMsg["expected_response"] = "device_info_response";
+  discoveryMsg["server_ip"] = WiFi.softAPIP().toString();
+  discoveryMsg["server_port"] = 1883;  // Puerto MQTT
+  discoveryMsg["timestamp"] = millis();
+  discoveryMsg["timeout"] = 10000;  // 10 segundos para responder
+  
+  String discoveryStr;
+  serializeJson(discoveryMsg, discoveryStr);
+  
+  // Enviar a clientes TCP conectados (si los hay)
+  int tcpClientsSent = 0;
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (clientConnected[i]) {
+      mqttClients[i].println(discoveryStr);
+      tcpClientsSent++;
     }
+  }
+  
+  // TODO: Agregar broadcast UDP aquí para alcanzar dispositivos no conectados por TCP
+  // Por ahora, usando solo TCP
+  
+  if (tcpClientsSent > 0) {
+    Serial.println("📡 Discovery enviado a " + String(tcpClientsSent) + " clientes TCP conectados");
+  } else {
+    Serial.println("⚠️ No hay clientes TCP conectados");
+    Serial.println("💡 Los dispositivos deben conectarse primero al servidor MQTT en " + WiFi.softAPIP().toString() + ":1883");
+  }
+  
+  Serial.println("⏳ Esperando respuestas de dispositivos (timeout: 10 segundos)...");
+  
+  if (isScanMode) {
+    Serial.println("⏳ Esperando respuesta de TODOS los dispositivos conectados...");
+  } else {
+    Serial.println("⏳ Esperando respuesta de dispositivos NO registrados...");
   }
   
   // Marcar tiempo de solicitud
   macRequestTime = millis();
-  lastRequestedMAC = "";
 }
 
 void setupWebServer() {
@@ -1241,7 +1427,9 @@ void setupWebServer() {
   // API para listar dispositivos
   webServer.on("/api/devices", HTTP_GET, [](){
     StaticJsonDocument<2048> response;
-    JsonArray devices = response["devices"];
+    JsonArray devices = response.createNestedArray("devices");
+    
+    Serial.println("📋 API devices solicitada - dispositivos autorizados: " + String(authorizedDevices.size()));
     
     for (auto& pair : authorizedDevices) {
       JsonObject device = devices.add<JsonObject>();
@@ -1252,10 +1440,17 @@ void setupWebServer() {
       device["isActive"] = pair.second.isActive;
       device["lastSeen"] = pair.second.lastSeen;
       device["currentIP"] = pair.second.currentIP;
+      
+      Serial.println("📱 Dispositivo en lista: " + pair.second.macAddress + " (" + pair.second.deviceType + ")");
     }
+    
+    response["success"] = true;
+    response["total_devices"] = authorizedDevices.size();
     
     String responseStr;
     serializeJson(response, responseStr);
+    
+    Serial.println("📤 Respuesta JSON devices: " + responseStr);
     webServer.send(200, "application/json", responseStr);
   });
   
@@ -1338,34 +1533,291 @@ void setupWebServer() {
   webServer.on("/api/request-mac", HTTP_POST, [](){
     StaticJsonDocument<200> response;
     
-    // Reiniciar la variable de MAC recibida
-    lastRequestedMAC = "";
+    // NO reiniciar las variables - mantener información previa
+    Serial.println("🌐 API consulta recibida desde web");
+    
+    // Contar clientes TCP conectados
+    int connectedCount = 0;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+      if (clientConnected[i]) {
+        connectedCount++;
+        Serial.println("  📱 Cliente " + String(i) + " conectado desde: " + mqttClients[i].remoteIP().toString());
+      }
+    }
+    
+    Serial.println("📊 Resumen:");
+    Serial.println("  Clientes TCP conectados: " + String(connectedCount));
+    Serial.println("  Dispositivos autorizados: " + String(authorizedDevices.size()));
+    Serial.println("  Módulos registrados: " + String(registeredModules.size()));
     
     // Solicitar MAC a todos los FingerprintScanners conectados
     requestMACFromFingerprintScanners();
     
+    // Para propósitos de testing - si no hay dispositivos reales conectados,
+    // proporcionar opción de simular un dispositivo para pruebas
+    if (connectedCount == 0) {
+      Serial.println("⚠️ No hay dispositivos físicos conectados por TCP");
+      Serial.println("💡 Para pruebas: puede simular un dispositivo no registrado");
+      Serial.println("💡 O use el botón 'Simular Dispositivo' en la interfaz web");
+    }
+    
     response["success"] = true;
-    response["message"] = "Solicitud enviada a FingerprintScanners conectados";
+    response["message"] = "Discovery iniciado - esperando respuestas de dispositivos reales";
+    response["connected_clients"] = connectedCount;
+    response["server_ip"] = WiFi.softAPIP().toString();
+    response["server_port"] = 1883;
+    response["debug_info"] = "Ver consola serial para más detalles";
     
     String responseStr;
     serializeJson(response, responseStr);
     webServer.send(200, "application/json", responseStr);
   });
   
-  // API para obtener la última MAC recibida
+  // API para obtener la última MAC y tipo recibidos
   webServer.on("/api/get-mac", HTTP_GET, [](){
     StaticJsonDocument<200> response;
     
-    if (lastRequestedMAC != "") {
+    Serial.println("🔍 DEBUG get-mac:");
+    Serial.println("  lastRequestedMAC: '" + lastRequestedMAC + "'");
+    Serial.println("  lastRequestedDeviceType: '" + lastRequestedDeviceType + "'");
+    Serial.println("  macRequestTime: " + String(macRequestTime));
+    Serial.println("  Tiempo actual: " + String(millis()));
+    
+    // Verificar si la información es reciente (últimos 30 segundos)
+    if (lastRequestedMAC != "" && (millis() - macRequestTime) < 30000) {
       response["success"] = true;
       response["macAddress"] = lastRequestedMAC;
+      response["deviceType"] = lastRequestedDeviceType;
+      response["timestamp"] = macRequestTime;
+      Serial.println("✅ Devolviendo MAC encontrada");
     } else {
       response["success"] = false;
-      response["message"] = "No hay MAC disponible";
+      if (lastRequestedMAC == "") {
+        response["message"] = "No hay MAC disponible - ningún dispositivo no registrado ha respondido";
+        Serial.println("❌ No hay MAC disponible");
+      } else {
+        response["message"] = "Información de MAC expirada (más de 30 segundos)";
+        Serial.println("⏰ MAC expirada, antigüedad: " + String((millis() - macRequestTime)/1000) + " segundos");
+      }
     }
     
     String responseStr;
     serializeJson(response, responseStr);
+    webServer.send(200, "application/json", responseStr);
+  });
+
+  
+  // API para obtener módulos registrados
+  webServer.on("/api/modules", HTTP_GET, [](){
+    StaticJsonDocument<1024> response;
+    JsonArray modulesArray = response.createNestedArray("modules");
+    
+    for (auto& pair : registeredModules) {
+      ModuleInfo& module = pair.second;
+      JsonObject moduleObj = modulesArray.createNestedObject();
+      moduleObj["moduleId"] = module.moduleId;
+      moduleObj["moduleType"] = module.moduleType;
+      moduleObj["capabilities"] = module.capabilities;
+      moduleObj["macAddress"] = module.macAddress;
+      moduleObj["isActive"] = module.isActive;
+      moduleObj["isAuthenticated"] = module.isAuthenticated;
+      moduleObj["lastHeartbeat"] = module.lastHeartbeat;
+    }
+    
+    String responseStr;
+    serializeJson(response, responseStr);
+    webServer.send(200, "application/json", responseStr);
+  });
+
+  // API para obtener estadísticas del dashboard
+  webServer.on("/api/stats", HTTP_GET, [](){
+    StaticJsonDocument<512> response;
+    
+    // Dispositivos registrados = total en authorizedDevices
+    response["registered_devices"] = authorizedDevices.size();
+    
+    // Dispositivos conectados = dispositivos autorizados con IP actual conectada
+    int connectedDevices = 0;
+    unsigned long now = millis();
+    
+    for (auto& pair : authorizedDevices) {
+      AuthorizedDevice& device = pair.second;
+      if (device.isActive) {
+        // Verificar si hay un cliente TCP actualmente conectado desde la IP del dispositivo
+        bool isCurrentlyConnected = false;
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+          if (clientConnected[i] && mqttClients[i].remoteIP().toString() == device.currentIP) {
+            // Además verificar que haya actividad reciente (heartbeat o lastSeen)
+            if ((now - device.lastSeen) < 120000) { // 2 minutos
+              isCurrentlyConnected = true;
+              break;
+            }
+          }
+        }
+        if (isCurrentlyConnected) {
+          connectedDevices++;
+        }
+      }
+    }
+    
+    response["connected_devices"] = connectedDevices;
+    
+    // Estados futuros (por ahora false)
+    response["depositario_status"] = false;
+    response["placa_motores_status"] = false;
+    
+    String responseStr;
+    serializeJson(response, responseStr);
+    webServer.send(200, "application/json", responseStr);
+  });
+
+  // API para obtener dispositivos no registrados detectados
+  webServer.on("/api/unregistered-devices", HTTP_GET, [](){
+    StaticJsonDocument<2048> response;
+    JsonArray devices = response.createNestedArray("devices");
+    
+    // Obtener dispositivos de scan que no están registrados
+    for (auto& device : scannedDevices) {
+      bool isRegistered = false;
+      
+      // Verificar en dispositivos autorizados
+      for (auto& pair : authorizedDevices) {
+        if (pair.second.macAddress == device.macAddress) {
+          isRegistered = true;
+          break;
+        }
+      }
+      
+      // Si no está registrado, agregarlo a la lista
+      if (!isRegistered) {
+        JsonObject deviceObj = devices.add<JsonObject>();
+        deviceObj["macAddress"] = device.macAddress;
+        deviceObj["deviceType"] = device.deviceType;
+        deviceObj["moduleId"] = device.moduleId;
+        deviceObj["timestamp"] = device.timestamp;
+        deviceObj["isRegistered"] = false;
+      }
+    }
+    
+    // También buscar clientes TCP conectados que no están en authorizedDevices
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+      if (clientConnected[i]) {
+        String clientIP = mqttClients[i].remoteIP().toString();
+        bool foundInAuthorized = false;
+        
+        for (auto& pair : authorizedDevices) {
+          if (pair.second.currentIP == clientIP) {
+            foundInAuthorized = true;
+            break;
+          }
+        }
+        
+        if (!foundInAuthorized) {
+          // Cliente conectado pero no autorizado
+          JsonObject deviceObj = devices.add<JsonObject>();
+          deviceObj["macAddress"] = "Unknown_" + clientIP;
+          deviceObj["deviceType"] = "unknown";
+          deviceObj["moduleId"] = "unidentified_" + String(i);
+          deviceObj["timestamp"] = millis();
+          deviceObj["isRegistered"] = false;
+          deviceObj["clientIP"] = clientIP;
+        }
+      }
+    }
+    
+    response["success"] = true;
+    response["total_unregistered"] = devices.size();
+    
+    String responseStr;
+    serializeJson(response, responseStr);
+    webServer.send(200, "application/json", responseStr);
+  });
+
+  // API para escanear todos los dispositivos conectados (usa lógica modificada)
+  webServer.on("/api/scan-devices", HTTP_POST, [](){
+    StaticJsonDocument<200> response;
+    
+    Serial.println("🔍 API scan-devices llamada desde web");
+    
+    // Debug: mostrar estado de conexiones antes del scan
+    int clientesConectados = 0;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+      if (clientConnected[i]) {
+        clientesConectados++;
+        Serial.println("  📱 Cliente " + String(i) + " conectado desde: " + mqttClients[i].remoteIP().toString());
+      }
+    }
+    Serial.println("📊 Total clientes conectados: " + String(clientesConectados));
+    
+    // Limpiar resultados anteriores
+    scannedDevices.clear();
+    
+    // Marcar que estamos en modo scan (para que handleMACResponse agregue todos los dispositivos)
+    isScanMode = true;
+    
+    // Solo dispositivos reales - sin simulaciones
+    
+    // Usar la función existente (para dispositivos reales)
+    requestMACFromFingerprintScanners();
+    
+    response["success"] = true;
+    response["message"] = "Scan iniciado - esperando respuestas de dispositivos reales";
+    
+    String responseStr;
+    serializeJson(response, responseStr);
+    webServer.send(200, "application/json", responseStr);
+  });
+
+  // API para obtener resultados del scan
+  webServer.on("/api/scan-results", HTTP_GET, [](){
+    StaticJsonDocument<2048> response;
+    JsonArray devices = response.createNestedArray("devices");
+    
+    Serial.println("🔍 API scan-results solicitada - dispositivos en lista: " + String(scannedDevices.size()));
+    
+    // Desactivar modo scan después de obtener resultados
+    if (isScanMode) {
+      isScanMode = false;
+      Serial.println("🔍 Modo scan desactivado");
+    }
+    
+    // Agregar dispositivos escaneados
+    for (auto& device : scannedDevices) {
+      JsonObject deviceObj = devices.add<JsonObject>();
+      deviceObj["macAddress"] = device.macAddress;
+      deviceObj["deviceType"] = device.deviceType;
+      deviceObj["moduleId"] = device.moduleId;
+      
+      // Verificar si está registrado
+      bool isRegistered = false;
+      
+      // Verificar en dispositivos autorizados (la clave del mapa ES el MAC address)
+      isRegistered = (authorizedDevices.find(device.macAddress) != authorizedDevices.end());
+      
+      // Verificar en módulos registrados
+      if (!isRegistered) {
+        for (auto& pair : registeredModules) {
+          if (pair.second.macAddress == device.macAddress) {
+            isRegistered = true;
+            break;
+          }
+        }
+      }
+      
+      deviceObj["isRegistered"] = isRegistered;
+      
+      Serial.println("📱 Dispositivo en scan: " + device.macAddress + " (" + device.deviceType + ") - Registrado: " + (isRegistered ? "Sí" : "No"));
+    }
+    
+    response["success"] = true;
+    response["total_devices"] = scannedDevices.size();
+    
+    String responseStr;
+    serializeJson(response, responseStr);
+    
+    Serial.println("📤 Respuesta JSON scan-results: " + responseStr);
+    Serial.println("📊 Array devices size: " + String(devices.size()));
+    
     webServer.send(200, "application/json", responseStr);
   });
   
@@ -1375,22 +1827,103 @@ void setupWebServer() {
 
 void loadAuthorizedDevices() {
   // TODO: Implementar carga desde SPIFFS
-  // Por ahora, agregar un dispositivo de prueba
-  AuthorizedDevice testDevice;
-  testDevice.macAddress = "AA:BB:CC:DD:EE:FF";
-  testDevice.deviceType = "fingerprint";
-  testDevice.apiKey = generateAPIKey();
-  testDevice.description = "Scanner de Prueba";
-  testDevice.isActive = true;
-  testDevice.lastSeen = 0;
-  testDevice.currentIP = "";
-  
-  authorizedDevices[testDevice.macAddress] = testDevice;
-  
-  // Serial.println("📱 Dispositivo de prueba agregado");
+  // Por ahora, inicializar vacío - los dispositivos se agregan manualmente
+  Serial.println("📱 Sistema de dispositivos autorizados inicializado (vacío)");
 }
 
 void saveAuthorizedDevices() {
   // TODO: Implementar guardado en SPIFFS
   Serial.println("💾 Dispositivos autorizados guardados (pendiente implementar persistencia)");
 }
+
+void cleanupTestDevices() {
+  Serial.println("🧹 Limpiando TODOS los dispositivos de prueba...");
+  
+  // Lista extendida de MACs de dispositivos de prueba a eliminar
+  std::vector<String> testMacs = {
+    "C8:2B:96:12:34:56",  // fingerprint_scanner_001
+    "C8:2B:96:AB:CD:EF",  // rfid_reader_002  
+    "C8:2B:96:78:90:12",  // sensor_module_003
+    "AA:BB:CC:DD:EE:FF"   // Dispositivo de ejemplo que se agregaba
+  };
+  
+  int removedDevices = 0;
+  int removedModules = 0;
+  
+  // Eliminar de authorizedDevices - primero por MACs específicas
+  for (const String& testMac : testMacs) {
+    auto it = authorizedDevices.find(testMac);
+    if (it != authorizedDevices.end()) {
+      Serial.println("🗑️ Eliminando dispositivo de prueba: " + testMac);
+      authorizedDevices.erase(it);
+      removedDevices++;
+    }
+  }
+  
+  // Eliminar dispositivos por descripción de prueba
+  auto deviceIt = authorizedDevices.begin();
+  while (deviceIt != authorizedDevices.end()) {
+    String description = deviceIt->second.description;
+    bool isTestDevice = false;
+    
+    // Verificar si contiene palabras clave de prueba
+    if (description.indexOf("Prueba") != -1 || 
+        description.indexOf("TEST") != -1 || 
+        description.indexOf("test") != -1 ||
+        description.indexOf("SIMULADO") != -1 ||
+        description.indexOf("simulado") != -1 ||
+        description.indexOf("DEMO") != -1 ||
+        description.indexOf("demo") != -1 ||
+        description.indexOf("Auto-registrado") != -1 ||
+        description.indexOf("Eliminar cuando tengas dispositivos reales") != -1) {
+      isTestDevice = true;
+    }
+    
+    if (isTestDevice) {
+      Serial.println("🗑️ Eliminando dispositivo de prueba por descripción: " + deviceIt->first + " - " + description);
+      deviceIt = authorizedDevices.erase(deviceIt);
+      removedDevices++;
+    } else {
+      ++deviceIt;
+    }
+  }
+  
+  // Eliminar de registeredModules (buscar por MAC)
+  auto moduleIt = registeredModules.begin();
+  while (moduleIt != registeredModules.end()) {
+    bool isTestDevice = false;
+    for (const String& testMac : testMacs) {
+      if (moduleIt->second.macAddress == testMac) {
+        isTestDevice = true;
+        break;
+      }
+    }
+    
+    // También eliminar por descripción que contenga "Auto-registrado" o IDs de prueba
+    if (!isTestDevice) {
+      String moduleId = moduleIt->second.moduleId;
+      if (moduleId == "fingerprint_scanner_001" || 
+          moduleId == "rfid_reader_002" || 
+          moduleId == "sensor_module_003" ||
+          moduleIt->second.macAddress.indexOf("Scanner Auto-registrado") != -1) {
+        isTestDevice = true;
+      }
+    }
+    
+    if (isTestDevice) {
+      Serial.println("🗑️ Eliminando módulo de prueba: " + moduleIt->second.moduleId);
+      moduleIt = registeredModules.erase(moduleIt);
+      removedModules++;
+    } else {
+      ++moduleIt;
+    }
+  }
+  
+  if (removedDevices > 0 || removedModules > 0) {
+    Serial.println("✅ Limpieza completada - Dispositivos: " + String(removedDevices) + ", Módulos: " + String(removedModules));
+    saveAuthorizedDevices();
+  } else {
+    Serial.println("ℹ️ No se encontraron dispositivos de prueba");
+  }
+}           
+
