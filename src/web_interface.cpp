@@ -207,8 +207,6 @@ function showMessage(msg, isError, target = 'message') {
   setTimeout(() => el.innerHTML = '', 5000);
 }
 
-// debugLog removed to keep UI clean
-
 function showTab(tabName) {
   // Ocultar todas las pestañas
   document.querySelectorAll('.tab-content').forEach(tab => tab.classList.add('hidden'));
@@ -216,7 +214,17 @@ function showTab(tabName) {
   
   // Mostrar pestaña seleccionada
   document.getElementById(tabName + 'Tab').classList.remove('hidden');
-  event.target.classList.add('active');
+
+  // Asignar .active al botón cuyo onclick contiene el tabName (robusto ante event undefined)
+  const tabs = document.querySelectorAll('.tab');
+  for (const t of tabs) {
+    const onclickAttr = t.getAttribute('onclick') || '';
+    if (onclickAttr.indexOf("'" + tabName + "'") !== -1 || onclickAttr.indexOf('"' + tabName + '"') !== -1) {
+      t.classList.add('active');
+      break;
+    }
+  }
+
   currentTab = tabName;
   
   // Cargar datos específicos de cada pestaña
@@ -291,6 +299,50 @@ function login() {
   x.send('username=' + encodeURIComponent(u) + '&password=' + encodeURIComponent(p));
 }
 
+// Asegurar que loadDashboardStats exista antes de usarla desde loadDashboard
+function loadDashboardStats() {
+  return new Promise((resolve, reject) => {
+    console.log('Cargando estadísticas...');
+    const x = new XMLHttpRequest();
+    x.timeout = 5000; // 5 segundos timeout
+    x.open('GET', '/api/stats');
+
+    x.onreadystatechange = function() {
+      if (x.readyState == 4) {
+        if (x.status == 200) {
+          try {
+            const d = JSON.parse(x.responseText);
+            console.log('Stats recibidas:', d);
+            // Actualizar solo lo que corresponda aquí. connectedDevices se calcula desde /api/devices.
+            document.getElementById('totalDevices').textContent = d.registered_devices || 0;
+            document.getElementById('depositarioStatus').textContent = d.depositario_status ? '✅' : '❌';
+            document.getElementById('placaMotoresStatus').textContent = d.placa_motores_status ? '✅' : '❌';
+            resolve();
+          } catch (e) {
+            console.error('Error parsing stats:', e);
+            reject(e);
+          }
+        } else {
+          console.error('Stats HTTP error:', x.status);
+          reject(new Error('HTTP ' + x.status));
+        }
+      }
+    };
+
+    x.ontimeout = function() {
+      console.error('Stats timeout');
+      reject(new Error('Timeout'));
+    };
+
+    x.onerror = function() {
+      console.error('Stats network error');
+      reject(new Error('Network error'));
+    };
+
+    x.send();
+  });
+}
+
 function loadDashboard() {
   console.log('Cargando dashboard...');
   showRefreshIndicator(true);
@@ -335,7 +387,7 @@ function loadDashboardSimple() {
   // Establecer valores por defecto primero
   document.getElementById('totalDevices').textContent = '0';
   document.getElementById('connectedDevices').textContent = '0';  
-  document.getElementById('depositarioStatus').textContent = '❌';
+ document.getElementById('depositarioStatus').textContent = '❌';
   document.getElementById('placaMotoresStatus').textContent = '❌';
   document.getElementById('deviceGrid').innerHTML = '<div style="text-align:center;padding:40px;color:#666">Cargando dispositivos...</div>';
   document.getElementById('modulesList').innerHTML = '<div style="text-align:center;padding:40px;color:#666">Cargando módulos...</div>';
@@ -353,31 +405,25 @@ function loadDashboardSimple() {
 
 function loadStatsOnly() {
   return new Promise((resolve, reject) => {
-  // petición a /api/stats
     const x = new XMLHttpRequest();
     x.timeout = 3000;
     x.open('GET', '/api/stats');
-    
     x.onreadystatechange = function() {
       if (x.readyState == 4) {
         if (x.status == 200) {
           try {
             const d = JSON.parse(x.responseText);
-            // stats recibidas
+            // Sólo actualizar totalDevices aquí; connectedDevices lo calcula loadDevices/loadDevicesOnly
             document.getElementById('totalDevices').textContent = d.registered_devices || 0;
-            document.getElementById('connectedDevices').textContent = d.connected_devices || 0;
             resolve();
           } catch (e) {
-            // error parseando stats
-            resolve(); // No fallar por esto
+            resolve();
           }
         } else {
-          // HTTP error in stats
-          resolve(); // No fallar por esto
+          resolve();
         }
       }
     };
-    
     x.ontimeout = () => { resolve(); };
     x.onerror = () => { resolve(); };
     x.send();
@@ -386,26 +432,35 @@ function loadStatsOnly() {
 
 function loadDevicesOnly() {
   return new Promise((resolve, reject) => {
-  // petición a /api/devices
     const x = new XMLHttpRequest();
     x.timeout = 3000;
     x.open('GET', '/api/devices');
-    
     x.onreadystatechange = function() {
       if (x.readyState == 4) {
         if (x.status == 200) {
           try {
             const d = JSON.parse(x.responseText);
-            // dispositivos recibidos
-            displayDevicesDashboard(d.devices || []);
+            const devices = d.devices || [];
+            displayDevicesDashboard(devices);
+
+            // NUEVO: calcular connectedDevices localmente (misma lógica que loadDevices)
+            try {
+              const connectedCount = devices.filter(dev => {
+                return (dev.currentIP && dev.currentIP !== '') ||
+                       (!!dev.isConnected) ||
+                       isLastSeenRecent(dev.lastSeen, 5);
+              }).length;
+              document.getElementById('connectedDevices').textContent = connectedCount;
+            } catch (e) {
+              console.warn('No se pudo calcular connectedDevices desde devices (loadDevicesOnly):', e);
+            }
+
             resolve();
           } catch (e) {
-            // error parseando devices
             document.getElementById('deviceGrid').innerHTML = '<div style="color:red;">Error cargando dispositivos</div>';
             resolve();
           }
         } else {
-          // error HTTP en devices
           document.getElementById('deviceGrid').innerHTML = '<div style="color:red;">Error HTTP: ' + x.status + '</div>';
           resolve();
         }
@@ -423,49 +478,6 @@ function loadDevicesOnly() {
   });
 }
 
-function loadDashboardStats() {
-  return new Promise((resolve, reject) => {
-    console.log('Cargando estadísticas...');
-    const x = new XMLHttpRequest();
-    x.timeout = 5000; // 5 segundos timeout
-    x.open('GET', '/api/stats');
-    
-    x.onreadystatechange = function() {
-      if (x.readyState == 4) {
-        if (x.status == 200) {
-          try {
-            const d = JSON.parse(x.responseText);
-            console.log('Stats recibidas:', d);
-            document.getElementById('totalDevices').textContent = d.registered_devices || 0;
-            document.getElementById('connectedDevices').textContent = d.connected_devices || 0;
-            document.getElementById('depositarioStatus').textContent = d.depositario_status ? '✅' : '❌';
-            document.getElementById('placaMotoresStatus').textContent = d.placa_motores_status ? '✅' : '❌';
-            resolve();
-          } catch (e) {
-            console.error('Error parsing stats:', e);
-            reject(e);
-          }
-        } else {
-          console.error('Stats HTTP error:', x.status);
-          reject(new Error('HTTP ' + x.status));
-        }
-      }
-    };
-    
-    x.ontimeout = function() {
-      console.error('Stats timeout');
-      reject(new Error('Timeout'));
-    };
-    
-    x.onerror = function() {
-      console.error('Stats network error');
-      reject(new Error('Network error'));
-    };
-    
-    x.send();
-  });
-}
-
 function loadDevices() {
   return new Promise((resolve, reject) => {
     console.log('Cargando dispositivos...');
@@ -479,7 +491,22 @@ function loadDevices() {
           try {
             const d = JSON.parse(x.responseText);
             console.log('Dispositivos recibidos:', d.devices?.length || 0);
-            displayDevicesDashboard(d.devices || []);
+            const devices = d.devices || [];
+            displayDevicesDashboard(devices);
+
+            // NUEVO: calcular connectedDevices localmente a partir de la lista recibida
+            try {
+              const connectedCount = devices.filter(dev => {
+                // Considerar conectado si hay IP, o flag isConnected, o lastSeen reciente
+                return (dev.currentIP && dev.currentIP !== '') ||
+                       (!!dev.isConnected) ||
+                       isLastSeenRecent(dev.lastSeen, 5);
+              }).length;
+              document.getElementById('connectedDevices').textContent = connectedCount;
+            } catch (e) {
+              console.warn('No se pudo calcular connectedDevices desde devices:', e);
+            }
+
             resolve();
           } catch (e) {
             console.error('Error parsing devices:', e);
@@ -512,8 +539,10 @@ function displayDevicesDashboard(devices) {
     html = '<div style="text-align:center;padding:40px;color:#666">No hay dispositivos registrados</div>';
   } else {
     devices.forEach(device => {
-      // Considerar online si lastSeen es reciente (menos de 2 minutos)
-      const isOnline = device.isActive && device.lastSeen && device.lastSeen > 0;
+      // Considerar online si tiene IP, o isConnected, o lastSeen reciente (<5 min)
+      const isOnline = (device.currentIP && device.currentIP !== '') ||
+                       (!!device.isConnected) ||
+                       isLastSeenRecent(device.lastSeen, 5);
       const statusClass = isOnline ? 'status-online' : 'status-offline';
       const statusText = isOnline ? 'Online' : 'Offline';
       
@@ -531,7 +560,7 @@ function displayDevicesDashboard(devices) {
             <div><strong>Última conexión:</strong> ${formatLastSeen(device.lastSeen)}</div>
           </div>
           <div style="margin-top:15px">
-            <button class="btn btn-small btn-danger" onclick="removeDevice('${device.macAddress}')">Eliminar</button>
+            <!-- Botón eliminar removido del Dashboard (solo visual) -->
           </div>
         </div>
       `;
@@ -564,16 +593,35 @@ function getDeviceTypeLabel(type) {
 
 function formatLastSeen(timestamp) {
   if (!timestamp || timestamp === 0) return 'Nunca';
-  
-  // El timestamp viene en milisegundos desde el boot del ESP32
-  // Necesitamos calcular el tiempo transcurrido desde que se recibió
   const currentTime = Date.now();
-  const bootTime = currentTime - timestamp; // Aproximación
-  
-  // Para heartbeat, usar directamente la diferencia con tiempo actual aproximado
-  const diff = Math.abs(timestamp - (currentTime % 4294967295)); // uint32_t max
+  const diff = Math.abs(timestamp - (currentTime % 4294967295));
   const minutes = Math.floor(diff / 60000);
-  
+  if (minutes < 1) return 'Ahora';
+  if (minutes < 60) return `Hace ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Hace ${hours} h`;
+  return `Hace ${Math.floor(hours / 24)} días`;
+}
+
+// Helper: devuelve minutos transcurridos desde timestamp (timestamp = millis() del ESP)
+function getMinutesSince(timestamp) {
+  if (!timestamp || timestamp === 0) return Number.MAX_SAFE_INTEGER;
+  const now = Date.now();
+  // El ESP envía millis() (uint32), aproximamos con modulo para compararlo con Date.now()
+  const approxNow = now % 4294967295;
+  const diff = Math.abs(approxNow - timestamp);
+  return Math.floor(diff / 60000);
+}
+
+// Nuevo helper: considera reciente si < 5 minutos (ajustable)
+function isLastSeenRecent(timestamp, minutesThreshold = 5) {
+  return getMinutesSince(timestamp) < minutesThreshold;
+}
+
+// Mejorar formatModuleTime: calcular recencia correctamente (usa minutos desde timestamp)
+function formatModuleTime(timestamp) {
+  if (!timestamp || timestamp === 0) return 'Nunca';
+  const minutes = getMinutesSince(timestamp);
   if (minutes < 1) return 'Ahora';
   if (minutes < 60) return `Hace ${minutes} min`;
   const hours = Math.floor(minutes / 60);
@@ -587,15 +635,65 @@ function loadModules() {
     const x = new XMLHttpRequest();
     x.timeout = 5000; // 5 segundos timeout
     x.open('GET', '/api/modules');
-    
+
     x.onreadystatechange = function() {
       if (x.readyState == 4) {
         if (x.status == 200) {
           try {
             const d = JSON.parse(x.responseText);
             console.log('Módulos recibidos:', d.modules?.length || 0);
-            displayModules(d.modules || []);
-            resolve();
+            const modules = d.modules || [];
+
+            if (modules.length === 0) {
+              console.log('No hay módulos desde /api/modules, intentando fallback desde /api/devices');
+              const x2 = new XMLHttpRequest();
+              x2.timeout = 4000;
+              x2.open('GET', '/api/devices');
+              x2.onreadystatechange = function() {
+                if (x2.readyState == 4) {
+                  try {
+                    if (x2.status == 200) {
+                      const dd = JSON.parse(x2.responseText);
+                      const devices = dd.devices || [];
+                      const pseudoModules = [];
+                      devices.forEach(dev => {
+                        // considerar como "módulo" si tiene IP o clientIndex asignado o está conectado
+                        if ((dev.currentIP && dev.currentIP !== '') || (dev.clientIndex && dev.clientIndex >= 0) || dev.isConnected) {
+                          const moduleId = (dev.deviceType || 'module') + '_' + (dev.macAddress ? dev.macAddress.replace(/:/g,'') : Math.random().toString(36).substring(2,8));
+                          // asignar lastHeartbeat desde device.lastSeen para que formatModuleTime funcione
+                          const lastHb = dev.lastSeen || 0;
+                          // marcar activo si IP, flag o lastSeen reciente
+                          const active = (dev.currentIP && dev.currentIP !== '') || (!!dev.isConnected) || isLastSeenRecent(dev.lastSeen, 5);
+                          pseudoModules.push({
+                            moduleId: moduleId,
+                            moduleType: dev.deviceType || 'unknown',
+                            capabilities: dev.capabilities || '',
+                            macAddress: dev.macAddress || '',
+                            isActive: active,
+                            lastHeartbeat: lastHb
+                          });
+                        }
+                      });
+                      console.log('Fallback pseudo-modules:', pseudoModules.length);
+                      displayModules(pseudoModules);
+                    } else {
+                      console.warn('/api/devices HTTP error in fallback:', x2.status);
+                      displayModules([]); // mostrar vacío
+                    }
+                  } catch (e) {
+                    console.error('Error parsing devices in fallback:', e);
+                    displayModules([]); // mostrar vacío
+                  }
+                  resolve();
+                }
+              };
+              x2.ontimeout = () => { console.warn('Fallback /api/devices timeout'); displayModules([]); resolve(); };
+              x2.onerror = () => { console.warn('Fallback /api/devices network error'); displayModules([]); resolve(); };
+              x2.send();
+            } else {
+              displayModules(modules);
+              resolve();
+            }
           } catch (e) {
             console.error('Error parsing modules:', e);
             reject(e);
@@ -606,17 +704,17 @@ function loadModules() {
         }
       }
     };
-    
+
     x.ontimeout = function() {
       console.error('Modules timeout');
       reject(new Error('Timeout'));
     };
-    
+
     x.onerror = function() {
       console.error('Modules network error');
       reject(new Error('Network error'));
     };
-    
+
     x.send();
   });
 }
@@ -627,7 +725,6 @@ function displayModules(modules) {
     html += '<div style="text-align:center;padding:40px;color:#666">No hay módulos activos</div>';
   } else {
     modules.forEach(module => {
-      // Para módulos, consideramos activo si es reciente
       const isActive = module.isActive;
       const statusClass = isActive ? 'status-online' : 'status-offline';
       const statusText = isActive ? 'Activo' : 'Inactivo';
@@ -645,6 +742,9 @@ function displayModules(modules) {
             <div><strong>MAC:</strong> ${module.macAddress}</div>
             <div><strong>Último heartbeat:</strong> ${formatModuleTime(module.lastHeartbeat)}</div>
           </div>
+          <div style="margin-top:15px">
+            <button class="btn btn-danger btn-small" onclick="deleteModule('${module.moduleId}')">Eliminar</button>
+          </div>
         </div>
       `;
     });
@@ -653,16 +753,229 @@ function displayModules(modules) {
   document.getElementById('modulesList').innerHTML = html;
 }
 
-function formatModuleTime(timestamp) {
-  if (!timestamp || timestamp === 0) return 'Nunca';
-  
-  // Los heartbeats usan millis() del ESP32, no tiempo real
-  // Simplemente mostrar si es reciente (menos de 2 minutos = 120000ms)
-  if (timestamp > 120000) {
-    return 'Activo';
-  } else {
-    return 'Hace poco';
+function deleteModule(moduleId) {
+  if (!moduleId) {
+    showMessage('ID de módulo inválida', true);
+    return;
   }
+  if (!confirm('¿Eliminar módulo y persistir (EEPROM)? ' + moduleId + '?')) return;
+  fetch('/api/modules/delete_device', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'module_id=' + encodeURIComponent(moduleId)
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.success) {
+      showMessage('Módulo eliminado', false);
+      loadModules();
+      if (currentTab === 'dashboard') loadDashboard();
+    } else {
+      showMessage('Error eliminando módulo: ' + (d.error || d.message), true);
+    }
+  })
+  .catch(e => {
+    console.error('deleteModule error', e);
+    showMessage('Error de red eliminando módulo', true);
+  });
+}
+
+function scanAllDevices() {
+  const scanBtn = document.getElementById('scanBtn');
+  const scanStatus = document.getElementById('scanStatus');
+  const scanResults = document.getElementById('scanResults');
+  
+  scanBtn.disabled = true;
+  scanBtn.textContent = '🔄 Escaneando...';
+  scanStatus.className = 'scan-status scanning';
+  scanStatus.textContent = '🔍 Escaneando dispositivos conectados...';
+  scanStatus.classList.remove('hidden');
+  scanResults.innerHTML = '';
+  
+  fetch('/api/scan-devices', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      setTimeout(() => {
+        fetchScanResults();
+      }, 3000);
+    } else {
+      throw new Error(data.message || 'Error al iniciar scan');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    scanStatus.className = 'scan-status error';
+    scanStatus.textContent = '❌ Error al escanear dispositivos: ' + error.message;
+    scanBtn.disabled = false;
+    scanBtn.textContent = '🔍 Escanear Dispositivos';
+  });
+}
+
+function fetchScanResults() {
+  const scanBtn = document.getElementById('scanBtn');
+  const scanStatus = document.getElementById('scanStatus');
+  const scanResults = document.getElementById('scanResults');
+  
+  fetch('/api/scan-results')
+  .then(response => response.json())
+  .then(data => {
+    console.log('fetchScanResults - Datos recibidos:', data);
+    if (data.success) {
+      const devices = data.devices || [];
+      displayScanResults(devices);
+      scanStatus.className = 'scan-status completed';
+      scanStatus.textContent = `✅ Scan completado. Encontrados ${devices.length} dispositivos.`;
+    } else {
+      throw new Error(data.message || 'Error al obtener resultados');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    scanStatus.className = 'scan-status error';
+    scanStatus.textContent = '❌ Error al obtener resultados: ' + error.message;
+  })
+  .finally(() => {
+    scanBtn.disabled = false;
+    scanBtn.textContent = '🔍 Escanear Dispositivos';
+  });
+}
+
+function displayScanResults(devices) {
+  const scanResults = document.getElementById('scanResults');
+  if (!devices || devices.length === 0) {
+    scanResults.innerHTML = '<p>No se encontraron dispositivos conectados.</p>';
+    return;
+  }
+  
+  let html = '';
+  devices.forEach(device => {
+    const isRegistered = device.isRegistered;
+    const statusClass = isRegistered ? 'registered' : 'unregistered';
+    const statusBadge = isRegistered ? 
+      '<span class="registered-badge">✅ REGISTRADO</span>' : 
+      '<span class="unregistered-badge">⚠️ NO REGISTRADO</span>';
+    
+    const deviceTypeNames = {
+      'fingerprint': '🔒 Lector de Huellas',
+      'rfid': '📱 Lector RFID',
+      'camera': '📹 Cámara',
+      'sensor': '📡 Sensor',
+      'actuator': '⚙️ Actuador'
+    };
+    
+    const actions = isRegistered ? 
+      `<button class="btn btn-secondary" onclick="viewDeviceDetails('${device.macAddress}')" title="Ver detalles">👁️ Ver</button>` :
+      `<button class="btn" onclick="quickRegisterDevice('${device.macAddress}', '${device.deviceType}', '${device.moduleId}')" title="Registrar dispositivo">➕ Registrar</button>`;
+    
+    html += `
+      <div class="scan-device-card ${statusClass}">
+        <div class="scan-device-header">
+          <div class="scan-device-info">
+            <div class="scan-device-mac">${device.macAddress}</div>
+            <div class="scan-device-type">${deviceTypeNames[device.deviceType] || device.deviceType}</div>
+            <div class="scan-device-status">ID: ${device.moduleId}</div>
+          </div>
+          <div class="scan-device-actions">
+            ${statusBadge}
+            ${actions}
+          </div>
+        </div>
+      </div>
+    `;
+  });
+  scanResults.innerHTML = html;
+}
+
+function quickRegisterDevice(macAddress, deviceType, moduleId) {
+  const description = prompt(`Ingrese una descripción para el dispositivo:\nMAC: ${macAddress}\nTipo: ${deviceType}`, `Dispositivo ${deviceType} - ${moduleId}`);
+  if (description === null) return;
+  fetch('/api/add-device', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: `macAddress=${encodeURIComponent(macAddress)}&deviceType=${encodeURIComponent(deviceType)}&description=${encodeURIComponent(description)}`
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      alert(`✅ Dispositivo registrado exitosamente!\nAPI Key: ${data.apiKey}`);
+      fetchScanResults();
+    } else {
+      alert(`❌ Error: ${data.message || 'No se pudo registrar el dispositivo'}`);
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    alert('❌ Error de conexión al registrar dispositivo');
+  });
+}
+
+function viewDeviceDetails(macAddress) {
+  showTab('dashboard');
+  setTimeout(() => {
+    const deviceCards = document.querySelectorAll('.device-card');
+    deviceCards.forEach(card => {
+      const macText = card.querySelector('.device-id').textContent;
+      if (macText.includes(macAddress)) {
+        card.style.border = '2px solid #007bff';
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setTimeout(() => {
+          card.style.border = '';
+        }, 3000);
+      }
+    });
+  }, 500);
+}
+
+function clearScanResults() {
+  const scanResults = document.getElementById('scanResults');
+  const scanStatus = document.getElementById('scanStatus');
+  scanResults.innerHTML = '';
+  scanStatus.classList.add('hidden');
+}
+
+function debugScan() {
+  const scanStatus = document.getElementById('scanStatus');
+  const scanResults = document.getElementById('scanResults');
+  scanStatus.className = 'scan-status scanning';
+  scanStatus.textContent = '🐛 Obteniendo información de debug...';
+  scanStatus.classList.remove('hidden');
+  fetch('/api/scan-devices', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  })
+  .then(response => response.json())
+  .then(data => {
+    console.log('Debug - Respuesta scan-devices:', data);
+    return fetch('/api/scan-results');
+  })
+  .then(response => response.json())
+  .then(data => {
+    console.log('Debug - Respuesta scan-results:', data);
+    scanStatus.className = 'scan-status completed';
+    scanStatus.textContent = `🐛 Debug completado. Check consola del navegador. Dispositivos: ${data.total_devices || 0}`;
+    scanResults.innerHTML = `
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 6px; font-family: monospace;">
+        <h4>🐛 Información de Debug:</h4>
+        <p><strong>Total dispositivos:</strong> ${data.total_devices || 0}</p>
+        <p><strong>Estado API:</strong> ${data.success ? '✅ OK' : '❌ Error'}</p>
+        <p><strong>Datos completos:</strong></p>
+        <pre>${JSON.stringify(data, null, 2)}</pre>
+      </div>
+    `;
+  })
+  .catch(error => {
+    console.error('Debug Error:', error);
+    scanStatus.className = 'scan-status error';
+    scanStatus.textContent = '❌ Error en debug: ' + error.message;
+  });
 }
 
 function addDevice() {
@@ -716,22 +1029,12 @@ function requestMAC() {
                 try {
                   const md = JSON.parse(x2.responseText);
                   if (md.success) {
-                    // Llenar la MAC
                     document.getElementById('newMac').value = md.macAddress;
-                    
-                    // Seleccionar automáticamente el tipo de dispositivo si está disponible
                     if (md.deviceType) {
                       const typeSelect = document.getElementById('newType');
-                      
-                      // El servidor ya envía los tipos mapeados (fingerprint, rfid, etc)
-                      // Solo verificar que sea un valor válido del select
                       const validTypes = ['fingerprint', 'rfid', 'camera', 'sensor', 'actuator'];
-                      
                       if (validTypes.includes(md.deviceType)) {
                         typeSelect.value = md.deviceType;
-                        console.log('Tipo de dispositivo seleccionado automáticamente:', md.deviceType);
-                        
-                        // Mostrar mensaje visual de confirmación
                         const deviceTypeNames = {
                           'fingerprint': '🔒 Lector de Huellas',
                           'rfid': '📱 Lector RFID',
@@ -739,16 +1042,13 @@ function requestMAC() {
                           'sensor': '📡 Sensor',
                           'actuator': '⚙️ Actuador'
                         };
-                        
                         setTimeout(() => {
                           showMessage(`Dispositivo detectado: ${deviceTypeNames[md.deviceType] || md.deviceType}`, false, 'registerMessage');
                         }, 500);
-                        
                       } else {
                         console.log('Tipo de dispositivo no reconocido:', md.deviceType);
                       }
                     }
-                    
                     btn.textContent = 'OK!';
                     btn.style.background = '#28a745';
                     setTimeout(function() {
@@ -780,9 +1080,9 @@ function requestMAC() {
 }
 
 function removeDevice(mac) {
-  if (confirm('¿Eliminar dispositivo ' + mac + '?')) {
+  if (confirm('¿Eliminar dispositivo (vista) ' + mac + '?')) {
     const x = new XMLHttpRequest();
-    x.open('POST', '/api/remove-device');
+    x.open('POST', '/api/dashboard/delete_device'); // visual endpoint
     x.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
     x.onreadystatechange = function() {
       if (x.readyState == 4) {
@@ -790,9 +1090,9 @@ function removeDevice(mac) {
           const d = JSON.parse(x.responseText);
           if (d.success) {
             loadDashboard();
-            showMessage('Dispositivo eliminado', false, 'message');
+            showMessage('Dispositivo eliminado (vista)', false, 'message');
           } else {
-            showMessage('Error eliminando dispositivo', true, 'message');
+            showMessage('Error eliminando dispositivo (vista)', true, 'message');
           }
         } catch (e) {
           showMessage('Error de conexión', true, 'message');
@@ -859,245 +1159,6 @@ function startAutoRefresh() {
   }, 10000); // Actualizar cada 10 segundos
 }
 
-// === FUNCIONES DE SCAN DE DISPOSITIVOS ===
-
-function scanAllDevices() {
-  const scanBtn = document.getElementById('scanBtn');
-  const scanStatus = document.getElementById('scanStatus');
-  const scanResults = document.getElementById('scanResults');
-  
-  // Resetear UI
-  scanBtn.disabled = true;
-  scanBtn.textContent = '🔄 Escaneando...';
-  scanStatus.className = 'scan-status scanning';
-  scanStatus.textContent = '🔍 Escaneando dispositivos conectados...';
-  scanStatus.classList.remove('hidden');
-  scanResults.innerHTML = '';
-  
-  // Solicitar scan al servidor
-  fetch('/api/scan-devices', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    }
-  })
-  .then(response => response.json())
-  .then(data => {
-    if (data.success) {
-      // Esperar un momento para que los dispositivos respondan
-      setTimeout(() => {
-        fetchScanResults();
-      }, 3000);
-    } else {
-      throw new Error(data.message || 'Error al iniciar scan');
-    }
-  })
-  .catch(error => {
-    console.error('Error:', error);
-    scanStatus.className = 'scan-status error';
-    scanStatus.textContent = '❌ Error al escanear dispositivos: ' + error.message;
-    scanBtn.disabled = false;
-    scanBtn.textContent = '🔍 Escanear Dispositivos';
-  });
-}
-
-function fetchScanResults() {
-  const scanBtn = document.getElementById('scanBtn');
-  const scanStatus = document.getElementById('scanStatus');
-  const scanResults = document.getElementById('scanResults');
-  
-  fetch('/api/scan-results')
-  .then(response => response.json())
-  .then(data => {
-    console.log('fetchScanResults - Datos recibidos:', data);
-    console.log('fetchScanResults - data.devices:', data.devices);
-    console.log('fetchScanResults - Array length:', data.devices ? data.devices.length : 'undefined');
-    
-    if (data.success) {
-      const devices = data.devices || [];
-      console.log('fetchScanResults - Llamando displayScanResults con:', devices);
-      displayScanResults(devices);
-      scanStatus.className = 'scan-status completed';
-      scanStatus.textContent = `✅ Scan completado. Encontrados ${devices.length} dispositivos.`;
-    } else {
-      throw new Error(data.message || 'Error al obtener resultados');
-    }
-  })
-  .catch(error => {
-    console.error('Error:', error);
-    scanStatus.className = 'scan-status error';
-    scanStatus.textContent = '❌ Error al obtener resultados: ' + error.message;
-  })
-  .finally(() => {
-    scanBtn.disabled = false;
-    scanBtn.textContent = '🔍 Escanear Dispositivos';
-  });
-}
-
-function displayScanResults(devices) {
-  console.log('displayScanResults - Iniciando con devices:', devices);
-  const scanResults = document.getElementById('scanResults');
-  console.log('displayScanResults - Elemento scanResults:', scanResults);
-  
-  if (!scanResults) {
-    console.error('displayScanResults - No se encontró elemento scanResults');
-    return;
-  }
-  
-  if (!devices || devices.length === 0) {
-    console.log('displayScanResults - No hay dispositivos para mostrar');
-    scanResults.innerHTML = '<p>No se encontraron dispositivos conectados.</p>';
-    return;
-  }
-  
-  let html = '';
-  devices.forEach(device => {
-    const isRegistered = device.isRegistered;
-    const statusClass = isRegistered ? 'registered' : 'unregistered';
-    const statusBadge = isRegistered ? 
-      '<span class="registered-badge">✅ REGISTRADO</span>' : 
-      '<span class="unregistered-badge">⚠️ NO REGISTRADO</span>';
-    
-    const deviceTypeNames = {
-      'fingerprint': '🔒 Lector de Huellas',
-      'rfid': '📱 Lector RFID',
-      'camera': '📹 Cámara',
-      'sensor': '📡 Sensor',
-      'actuator': '⚙️ Actuador'
-    };
-    
-    const actions = isRegistered ? 
-      `<button class="btn btn-secondary" onclick="viewDeviceDetails('${device.macAddress}')" title="Ver detalles">👁️ Ver</button>` :
-      `<button class="btn" onclick="quickRegisterDevice('${device.macAddress}', '${device.deviceType}', '${device.moduleId}')" title="Registrar dispositivo">➕ Registrar</button>`;
-    
-    html += `
-      <div class="scan-device-card ${statusClass}">
-        <div class="scan-device-header">
-          <div class="scan-device-info">
-            <div class="scan-device-mac">${device.macAddress}</div>
-            <div class="scan-device-type">${deviceTypeNames[device.deviceType] || device.deviceType}</div>
-            <div class="scan-device-status">ID: ${device.moduleId}</div>
-          </div>
-          <div class="scan-device-actions">
-            ${statusBadge}
-            ${actions}
-          </div>
-        </div>
-      </div>
-    `;
-  });
-  
-  console.log('displayScanResults - HTML generado (length):', html.length);
-  console.log('displayScanResults - HTML preview:', html.substring(0, 200));
-  scanResults.innerHTML = html;
-  console.log('displayScanResults - HTML insertado, contenido actual:', scanResults.innerHTML.length, 'caracteres');
-}
-
-function quickRegisterDevice(macAddress, deviceType, moduleId) {
-  const description = prompt(`Ingrese una descripción para el dispositivo:\nMAC: ${macAddress}\nTipo: ${deviceType}`, `Dispositivo ${deviceType} - ${moduleId}`);
-  
-  if (description === null) return; // Usuario canceló
-  
-  // Registrar dispositivo
-  fetch('/api/add-device', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: `macAddress=${encodeURIComponent(macAddress)}&deviceType=${encodeURIComponent(deviceType)}&description=${encodeURIComponent(description)}`
-  })
-  .then(response => response.json())
-  .then(data => {
-    if (data.success) {
-      alert(`✅ Dispositivo registrado exitosamente!\nAPI Key: ${data.apiKey}`);
-      // Actualizar la vista de scan
-      fetchScanResults();
-    } else {
-      alert(`❌ Error: ${data.message || 'No se pudo registrar el dispositivo'}`);
-    }
-  })
-  .catch(error => {
-    console.error('Error:', error);
-    alert('❌ Error de conexión al registrar dispositivo');
-  });
-}
-
-function viewDeviceDetails(macAddress) {
-  // Redirigir al dashboard y resaltar el dispositivo
-  showTab('dashboard');
-  // Pequeño delay para asegurar que el dashboard se cargue
-  setTimeout(() => {
-    // Buscar y resaltar la tarjeta del dispositivo
-    const deviceCards = document.querySelectorAll('.device-card');
-    deviceCards.forEach(card => {
-      const macText = card.querySelector('.device-id').textContent;
-      if (macText.includes(macAddress)) {
-        card.style.border = '2px solid #007bff';
-        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        setTimeout(() => {
-          card.style.border = '';
-        }, 3000);
-      }
-    });
-  }, 500);
-}
-
-function clearScanResults() {
-  const scanResults = document.getElementById('scanResults');
-  const scanStatus = document.getElementById('scanStatus');
-  
-  scanResults.innerHTML = '';
-  scanStatus.classList.add('hidden');
-}
-
-function debugScan() {
-  const scanStatus = document.getElementById('scanStatus');
-  const scanResults = document.getElementById('scanResults');
-  
-  scanStatus.className = 'scan-status scanning';
-  scanStatus.textContent = '🐛 Obteniendo información de debug...';
-  scanStatus.classList.remove('hidden');
-  
-  // Primero probar el API de scan
-  fetch('/api/scan-devices', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    }
-  })
-  .then(response => response.json())
-  .then(data => {
-    console.log('Debug - Respuesta scan-devices:', data);
-    
-    // Luego probar el API de resultados
-    return fetch('/api/scan-results');
-  })
-  .then(response => response.json())
-  .then(data => {
-    console.log('Debug - Respuesta scan-results:', data);
-    
-    scanStatus.className = 'scan-status completed';
-    scanStatus.textContent = `🐛 Debug completado. Check consola del navegador. Dispositivos: ${data.total_devices || 0}`;
-    
-    // Mostrar info en la página también
-    scanResults.innerHTML = `
-      <div style="background: #f8f9fa; padding: 15px; border-radius: 6px; font-family: monospace;">
-        <h4>🐛 Información de Debug:</h4>
-        <p><strong>Total dispositivos:</strong> ${data.total_devices || 0}</p>
-        <p><strong>Estado API:</strong> ${data.success ? '✅ OK' : '❌ Error'}</p>
-        <p><strong>Datos completos:</strong></p>
-        <pre>${JSON.stringify(data, null, 2)}</pre>
-      </div>
-    `;
-  })
-  .catch(error => {
-    console.error('Debug Error:', error);
-    scanStatus.className = 'scan-status error';
-    scanStatus.textContent = '❌ Error en debug: ' + error.message;
-  });
-}
-
-// Auto-load system info on page load
 window.onload = function() {
   loadSystemInfo();
 };
