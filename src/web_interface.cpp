@@ -29,7 +29,7 @@ body { font-family: 'Arial', sans-serif; background: linear-gradient(135deg, #66
 .device-card:hover { transform: translateY(-2px); }
 .device-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
 .device-id { font-weight: bold; font-size: 16px; color: #333; }
-.status-led { width: 12px; height: 12px; border-radius: 50%; margin-left: 0; margin-right: 0; }
+.status-led { width: 12px; height: 12px; border-radius: 50%; margin-left: 0; margin-right: 12px; }
 .status-online { background: #28a745; box-shadow: 0 0 10px rgba(40,167,69,0.5); }
 .status-offline { background: #dc3545; box-shadow: 0 0 10px rgba(220,53,69,0.5); }
 .device-details { font-size: 14px; color: #666; }
@@ -73,6 +73,25 @@ body { font-family: 'Arial', sans-serif; background: linear-gradient(135deg, #66
 .refresh-indicator.active { opacity: 1; }
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 .spinning { animation: spin 1s linear infinite; }
+
+/* NUEVO: Estilos para el menú de acciones del módulo */
+.module-menu {
+  position: fixed;
+  right: 20px;
+  top: 80px;
+  width: 340px;
+  max-width: calc(100% - 40px);
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+  z-index: 9999;
+  display: none;
+  padding: 16px;
+}
+.module-menu.show { display: block; }
+.module-menu .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+.module-menu .title { font-weight:700; font-size:16px; color:#333; }
+.module-menu .close-btn { background:#dc3545; color:white; border:none; padding:6px 10px; border-radius:6px; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -191,6 +210,18 @@ body { font-family: 'Arial', sans-serif; background: linear-gradient(135deg, #66
         <h3>📱 Módulos Registrados</h3>
         <div id="modulesList">
           <!-- Módulos se cargan aquí -->
+        </div>
+      </div>
+
+      <!-- Contenedor del menú de acciones por módulo (invisible hasta activarse) -->
+      <div id="moduleMenu" class="module-menu" role="dialog" aria-hidden="true">
+        <div class="header">
+          <div class="title" id="moduleMenuTitle">Acciones módulo</div>
+          <button class="close-btn" onclick="closeModuleMenu()">Cerrar</button>
+        </div>
+        <div id="moduleMenuBody">
+          <!-- Opciones específicas del módulo se renderizan aquí -->
+          <p style="color:#666;margin:8px 0">Seleccione una acción...</p>
         </div>
       </div>
     </div>
@@ -676,7 +707,9 @@ function loadModules() {
                           isActive: active,
                           lastHeartbeat: lastHb,
                           // Venimos de la lista "devices" => son módulos registrados
-                          isRegistered: true
+                          isRegistered: true,
+                          // Mostrar nombre legible: preferir description o name si están
+                          displayName: dev.description || dev.name || moduleId
                         });
                       });
                       console.log('Fallback pseudo-modules (todos devices):', pseudoModules.length);
@@ -696,9 +729,73 @@ function loadModules() {
               x2.onerror = () => { console.warn('Fallback /api/devices network error'); displayModules([]); resolve(); };
               x2.send();
             } else {
-              displayModules(modules);
-              resolve();
+              // Si /api/modules devolvió módulos, intentar enriquecer nombres consultando /api/devices
+              // para usar las descripciones que pusiste al registrar
+              try {
+                const xDev = new XMLHttpRequest();
+                xDev.timeout = 4000;
+                xDev.open('GET', '/api/devices');
+                xDev.onreadystatechange = function() {
+                  if (xDev.readyState == 4) {
+                    if (xDev.status == 200) {
+                      try {
+                        const dd = JSON.parse(xDev.responseText);
+                        const devicesList = dd.devices || [];
+                        // construir mapa mac (sin : y con mayúsculas) -> description/name
+                        const nameMap = {};
+                        devicesList.forEach(dv => {
+                          const mac = (dv.macAddress || dv.mac || dv.mac_address || '').toString().toUpperCase();
+                          if (mac) {
+                            nameMap[ mac.replace(/:/g,'') ] = (dv.description || dv.name || dv.label || dv.registeredName || '').toString();
+                          }
+                        });
+                        // enriquecer módulos
+                        modules.forEach(m => {
+                          // posibles campos de mac en el módulo
+                          const macCandidates = [
+                            m.macAddress, m.mac, m.deviceMac, m.mac_address, m.address
+                          ];
+                          let macPlain = '';
+                          for (const c of macCandidates) {
+                            if (c) { macPlain = c.toString().toUpperCase().replace(/:/g,''); break; }
+                          }
+                          // nombre preferido del módulo (varios aliases)
+                          const currentName = m.displayName || m.name || m.description || m.label || m.friendlyName || m.deviceName || m.registeredName || '';
+                          if (!currentName || currentName === '' || currentName.match(/^.+_[0-9A-F]{12}$/i)) {
+                            // si hay nombre en devices, usarlo
+                            const mapped = macPlain ? nameMap[macPlain] : null;
+                            if (mapped && mapped.length > 0) {
+                              m.displayName = mapped;
+                            } else {
+                              // fallback: conservar lo que tenga o moduleId
+                              m.displayName = currentName || m.moduleId;
+                            }
+                          } else {
+                            m.displayName = currentName;
+                          }
+                        });
+                        displayModules(modules);
+                      } catch (e) {
+                        console.warn('No se pudo parsear /api/devices en enriquecimiento de módulos:', e);
+                        displayModules(modules);
+                      }
+                    } else {
+                      // no hay devices; mostrar módulos tal cual
+                      displayModules(modules);
+                    }
+                    resolve();
+                  }
+                };
+                xDev.ontimeout = function() { displayModules(modules); resolve(); };
+                xDev.onerror = function() { displayModules(modules); resolve(); };
+                xDev.send();
+              } catch (e) {
+                console.warn('Error enriqueciendo módulos con /api/devices:', e);
+                displayModules(modules);
+                resolve();
+              }
             }
+
           } catch (e) {
             console.error('Error parsing modules:', e);
             reject(e);
@@ -734,11 +831,14 @@ function displayModules(modules) {
       const statusClass = isActive ? 'status-online' : 'status-offline';
       const statusText = isActive ? 'Activo' : 'Inactivo';
 
+      // elegir nombre a mostrar: displayName -> varios aliases -> moduleId
+      const shownName = module.displayName || module.registeredName || module.label || module.friendlyName || module.deviceName || module.name || module.description || module.moduleId;
+
       html += `
-        <div class="device-card" data-module-id="${module.moduleId}">
+        <div class="device-card" data-module-id="${module.moduleId}" data-mac="${module.macAddress || ''}">
           <div class="device-header">
-            <div class="device-id">${module.moduleId}</div>
-            <div style="display:flex;align-items:center">
+            <div class="device-id">${shownName}</div>
+            <div style="display:flex;align-items:center;gap:8px">
               <div class="status-led ${statusClass}" title="${statusText}"></div>
             </div>
           </div>
@@ -749,8 +849,9 @@ function displayModules(modules) {
             <div><strong>MAC:</strong> ${module.macAddress}</div>
             <div><strong>Último heartbeat:</strong> ${formatModuleTime(module.lastHeartbeat)}</div>
           </div>
-          <div style="margin-top:15px">
+          <div style="margin-top:15px; display:flex; gap:8px;">
             <button class="btn btn-danger btn-small" onclick="deleteModule('${module.moduleId}')">Eliminar</button>
+            <button class="btn btn-small" onclick="openModuleMenu('${module.moduleId}')">Acciones</button>
           </div>
         </div>
       `;
@@ -1214,6 +1315,90 @@ function startAutoRefresh() {
 window.onload = function() {
   loadSystemInfo();
 };
+
+/* NUEVAS FUNCIONES JS: abrir/cerrar menú y render placeholder de opciones */
+function openModuleMenu(moduleId) {
+  const menu = document.getElementById('moduleMenu');
+  const titleEl = document.getElementById('moduleMenuTitle');
+  const bodyEl = document.getElementById('moduleMenuBody');
+
+  // Intentar obtener info del módulo en la UI (si existe)
+  const card = document.querySelector(`[data-module-id="${moduleId}"]`);
+  let name = moduleId;
+  let mac = '';
+  if (card) {
+    const idEl = card.querySelector('.device-id');
+    name = idEl ? idEl.textContent : moduleId;
+    mac = card.getAttribute('data-mac') || card.querySelector('.device-details .device-details') || '';
+  }
+
+  titleEl.textContent = `Acciones — ${name}`;
+  // Plantilla simple de acciones (placeholder). Más acciones por tipo se podrán añadir después.
+  bodyEl.innerHTML = `
+    <div style="margin-top:6px">
+      <div style="margin-bottom:8px;color:#333"><strong>ID:</strong> ${moduleId}</div>
+      <div style="margin-bottom:8px;color:#333"><strong>MAC:</strong> ${mac || 'N/A'}</div>
+      <button class="btn btn-small" onclick="actionViewModule('${moduleId}')">Ver detalles</button>
+      <button class="btn btn-small" style="margin-top:6px" onclick="actionRefreshModule('${moduleId}')">Refrescar estado</button>
+      <button class="btn btn-danger" style="margin-top:8px" onclick="deleteModule('${moduleId}')">Eliminar (persistente)</button>
+    </div>
+  `;
+
+  menu.classList.add('show');
+  menu.setAttribute('aria-hidden', 'false');
+}
+
+function closeModuleMenu() {
+  const menu = document.getElementById('moduleMenu');
+  if (!menu) return;
+  menu.classList.remove('show');
+  menu.setAttribute('aria-hidden', 'true');
+}
+
+/* Placeholders para acciones (puedes implementar la lógica real luego) */
+function actionViewModule(moduleId) {
+  closeModuleMenu();
+  // Navegar a dashboard y destacar si tiene MAC
+  const card = document.querySelector(`[data-module-id="${moduleId}"]`);
+  const mac = card ? card.getAttribute('data-mac') : null;
+  if (mac) {
+    viewDeviceDetails(mac);
+  } else {
+    showMessage('No hay MAC disponible para ' + moduleId, true);
+  }
+}
+
+function actionRefreshModule(moduleId) {
+  closeModuleMenu();
+  showMessage('Solicitando refresh para ' + moduleId + ' ...', false);
+  // Llamada placeholder al endpoint de refresh (si existe)
+  fetch('/api/modules/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'module_id=' + encodeURIComponent(moduleId)
+  }).then(r => r.json().catch(()=>({success:false}))).then(d => {
+    if (d.success) {
+      showMessage('Refresh solicitado', false);
+      loadModules();
+    } else {
+      showMessage('Refresh falló', true);
+    }
+  }).catch(e => {
+    console.error('actionRefreshModule error', e);
+    showMessage('Error solicitando refresh', true);
+  });
+}
+
+/* Cerrar menú si se hace click fuera del mismo */
+window.addEventListener('click', function(e) {
+  const menu = document.getElementById('moduleMenu');
+  if (!menu) return;
+  if (menu.classList.contains('show')) {
+    if (!e.target.closest('#moduleMenu') && !e.target.matches('button[onclick^="openModuleMenu"]')) {
+      closeModuleMenu();
+    }
+  }
+});
 </script>
 </body>
 </html>
