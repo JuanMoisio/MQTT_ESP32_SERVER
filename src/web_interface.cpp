@@ -27,9 +27,9 @@ body { font-family: 'Arial', sans-serif; background: linear-gradient(135deg, #66
 .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; margin-top: 20px; }
 .device-card { background: white; border: 1px solid #e1e5e9; border-radius: 8px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); transition: transform 0.2s; }
 .device-card:hover { transform: translateY(-2px); }
-.device-header { display: flex; justify-content: between; align-items: center; margin-bottom: 15px; }
+.device-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
 .device-id { font-weight: bold; font-size: 16px; color: #333; }
-.status-led { width: 12px; height: 12px; border-radius: 50%; margin-left: auto; }
+.status-led { width: 12px; height: 12px; border-radius: 50%; margin-left: 0; margin-right: 0; }
 .status-online { background: #28a745; box-shadow: 0 0 10px rgba(40,167,69,0.5); }
 .status-offline { background: #dc3545; box-shadow: 0 0 10px rgba(220,53,69,0.5); }
 .device-details { font-size: 14px; color: #666; }
@@ -534,15 +534,20 @@ function loadDevices() {
 }
 
 function displayDevicesDashboard(devices) {
+  // Mostrar únicamente dispositivos conectados en el dashboard
+  const connectedDevices = (devices || []).filter(device => {
+    const isOnline = (device.currentIP && device.currentIP !== '') ||
+                     (!!device.isConnected) ||
+                     isLastSeenRecent(device.lastSeen, 5);
+    return isOnline;
+  });
+
   let html = '';
-  if (devices.length === 0) {
-    html = '<div style="text-align:center;padding:40px;color:#666">No hay dispositivos registrados</div>';
+  if (connectedDevices.length === 0) {
+    html = '<div style="text-align:center;padding:40px;color:#666">No hay dispositivos conectados</div>';
   } else {
-    devices.forEach(device => {
-      // Considerar online si tiene IP, o isConnected, o lastSeen reciente (<5 min)
-      const isOnline = (device.currentIP && device.currentIP !== '') ||
-                       (!!device.isConnected) ||
-                       isLastSeenRecent(device.lastSeen, 5);
+    connectedDevices.forEach(device => {
+      const isOnline = true; // ya filtrado
       const statusClass = isOnline ? 'status-online' : 'status-offline';
       const statusText = isOnline ? 'Online' : 'Offline';
       
@@ -656,25 +661,25 @@ function loadModules() {
                       const dd = JSON.parse(x2.responseText);
                       const devices = dd.devices || [];
                       const pseudoModules = [];
+                      // Incluir TODOS los dispositivos registrados (devices) como módulos,
+                      // marcando isActive si tienen hints de conexión.
                       devices.forEach(dev => {
-                        // considerar como "módulo" si tiene IP o clientIndex asignado o está conectado
-                        if ((dev.currentIP && dev.currentIP !== '') || (dev.clientIndex && dev.clientIndex >= 0) || dev.isConnected) {
-                          const moduleId = (dev.deviceType || 'module') + '_' + (dev.macAddress ? dev.macAddress.replace(/:/g,'') : Math.random().toString(36).substring(2,8));
-                          // asignar lastHeartbeat desde device.lastSeen para que formatModuleTime funcione
-                          const lastHb = dev.lastSeen || 0;
-                          // marcar activo si IP, flag o lastSeen reciente
-                          const active = (dev.currentIP && dev.currentIP !== '') || (!!dev.isConnected) || isLastSeenRecent(dev.lastSeen, 5);
-                          pseudoModules.push({
-                            moduleId: moduleId,
-                            moduleType: dev.deviceType || 'unknown',
-                            capabilities: dev.capabilities || '',
-                            macAddress: dev.macAddress || '',
-                            isActive: active,
-                            lastHeartbeat: lastHb
-                          });
-                        }
+                        const hasConnectionHints = (dev.currentIP && dev.currentIP !== '') || (dev.clientIndex && dev.clientIndex >= 0) || !!dev.isConnected;
+                        const moduleId = (dev.deviceType || 'module') + '_' + (dev.macAddress ? dev.macAddress.replace(/:/g,'') : Math.random().toString(36).substring(2,8));
+                        const lastHb = dev.lastSeen || 0;
+                        const active = hasConnectionHints || isLastSeenRecent(dev.lastSeen, 5);
+                        pseudoModules.push({
+                          moduleId: moduleId,
+                          moduleType: dev.deviceType || 'unknown',
+                          capabilities: dev.capabilities || '',
+                          macAddress: dev.macAddress || '',
+                          isActive: active,
+                          lastHeartbeat: lastHb,
+                          // Venimos de la lista "devices" => son módulos registrados
+                          isRegistered: true
+                        });
                       });
-                      console.log('Fallback pseudo-modules:', pseudoModules.length);
+                      console.log('Fallback pseudo-modules (todos devices):', pseudoModules.length);
                       displayModules(pseudoModules);
                     } else {
                       console.warn('/api/devices HTTP error in fallback:', x2.status);
@@ -725,15 +730,17 @@ function displayModules(modules) {
     html += '<div style="text-align:center;padding:40px;color:#666">No hay módulos activos</div>';
   } else {
     modules.forEach(module => {
-      const isActive = module.isActive;
+      const isActive = !!module.isActive;
       const statusClass = isActive ? 'status-online' : 'status-offline';
       const statusText = isActive ? 'Activo' : 'Inactivo';
-      
+
       html += `
-        <div class="device-card">
+        <div class="device-card" data-module-id="${module.moduleId}">
           <div class="device-header">
             <div class="device-id">${module.moduleId}</div>
-            <div class="status-led ${statusClass}" title="${statusText}"></div>
+            <div style="display:flex;align-items:center">
+              <div class="status-led ${statusClass}" title="${statusText}"></div>
+            </div>
           </div>
           <div class="device-details">
             <div><strong>Tipo:</strong> ${module.moduleType}</div>
@@ -759,24 +766,69 @@ function deleteModule(moduleId) {
     return;
   }
   if (!confirm('¿Eliminar módulo y persistir (EEPROM)? ' + moduleId + '?')) return;
-  fetch('/api/modules/delete_device', {
+
+  showMessage('Eliminando módulo ' + moduleId + ' ...', false);
+
+  // Optimistic UI: quitar tarjeta visualmente inmediatamente
+  try {
+    const cards = Array.from(document.querySelectorAll('#modulesList .device-card'));
+    cards.forEach(c => {
+      const idEl = c.querySelector('.device-id');
+      if (idEl && idEl.textContent === moduleId) {
+        c.remove();
+      }
+    });
+  } catch (e) {
+    // no romper si DOM cambia
+  }
+
+  const body = 'module_id=' + encodeURIComponent(moduleId);
+
+  // Intentar deregistrar (si el endpoint existe). No abortar si devuelve 404/otro no-ok:
+  fetch('/api/modules/deregister', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'module_id=' + encodeURIComponent(moduleId)
+    body: body
   })
-  .then(r => r.json())
-  .then(d => {
-    if (d.success) {
-      showMessage('Módulo eliminado', false);
-      loadModules();
-      if (currentTab === 'dashboard') loadDashboard();
+  .then(r => {
+    if (r.ok) {
+      return r.json().catch(() => ({ success: false }));
     } else {
-      showMessage('Error eliminando módulo: ' + (d.error || d.message), true);
+      // No existe el endpoint o devuelve error: continuar al borrado persistente
+      console.warn('Deregister HTTP', r.status, '-> continuando con delete_device');
+      return { success: false, httpStatus: r.status };
     }
   })
-  .catch(e => {
-    console.error('deleteModule error', e);
-    showMessage('Error de red eliminando módulo', true);
+  .then(d => {
+    // Siempre intentar delete_device (erase) ya sea que deregister haya dicho OK o no
+    return fetch('/api/modules/delete_device', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body + '&erase=1'
+    });
+  })
+  .then(r2 => {
+    if (!r2) throw new Error('No response from delete attempt');
+    if (!r2.ok) {
+      console.warn('Delete_device HTTP', r2.status);
+      return r2.json().catch(() => ({ success: false, httpStatus: r2.status }));
+    }
+    return r2.json().catch(() => ({ success: false }));
+  })
+  .then(d2 => {
+    if (d2 && d2.success) {
+      showMessage('Módulo eliminado y persistido en EEPROM', false);
+    } else {
+      showMessage('Módulo eliminado parcialmente. Revise servidor. ' + (d2 && (d2.error || d2.message || '')), true);
+    }
+    // Recargar para estado consistente
+    loadModules().catch(()=>{});
+    if (currentTab === 'dashboard') loadDashboard();
+  })
+  .catch(err => {
+    console.error('deleteModule error', err);
+    showMessage('Error eliminando módulo: ' + err.message, true);
+    loadModules();
   });
 }
 

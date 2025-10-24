@@ -13,6 +13,7 @@ extern const char* AP_PASSWORD;
 #define AP_SUBNET_ADDR  255, 255, 255, 0
 
 // Configuración opcional para WiFi cliente (si se quiere conectar también a internet)
+// Declaraciones extern para evitar múltiples definiciones en cada unidad de compilación
 extern const char* WIFI_SSID;
 extern const char* WIFI_PASSWORD;
 extern const bool ENABLE_STATION_MODE;

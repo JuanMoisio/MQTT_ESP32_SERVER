@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <WiFi.h> // <-- Moved here (required for AP+STA)
 #include "config.h"
 #include "WiFiManager.h"
 #include "WebServerManager.h"
@@ -6,19 +7,7 @@
 #include "DeviceManager.h"
 #include "EEPROMManager.h"
 
-// Definición de variables globales de configuración
-const char* AP_SSID = "DEPOSITO_BROKER";
-const char* AP_PASSWORD = "deposito123";
-const char* WIFI_SSID = "TU_WIFI_SSID";
-const char* WIFI_PASSWORD = "TU_WIFI_PASSWORD";
-const bool ENABLE_STATION_MODE = false;
 
-const char* ALLOWED_MODULE_TYPES[] = {
-    "rfid_reader",
-    "fingerprint_scanner"
-};
-
-const int NUM_ALLOWED_TYPES = sizeof(ALLOWED_MODULE_TYPES) / sizeof(ALLOWED_MODULE_TYPES[0]);
 
 // Managers del sistema
 WiFiManager* wifiManager;
@@ -47,6 +36,39 @@ void setup() {
     wifiManager = new WiFiManager();
     wifiManager->initialize();
 
+    // --- Mantener AP y (opcionalmente) conectar como STA a la misma red ---
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(AP_SSID, AP_PASSWORD);
+    Serial.print("🔌 Access Point activo: ");
+    Serial.println(AP_SSID);
+    Serial.print("AP IP: ");
+    Serial.println(WiFi.softAPIP().toString());
+
+    // Si ENABLE_STATION_MODE == true intentará conectar como cliente a tu red
+    if (ENABLE_STATION_MODE) {
+      Serial.print("🌐 Intentando conectar como STA a: ");
+      Serial.println(WIFI_SSID);
+
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+      unsigned long start = millis();
+      const unsigned long timeout = 15000; // 15s máximo (ajustable)
+      while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeout) {
+        delay(500);
+        Serial.print(".");
+      }
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println();
+        Serial.print("✅ Conectado a WiFi. STA IP: ");
+        Serial.println(WiFi.localIP().toString());
+        Serial.println("➡️ Puedes acceder al dashboard desde la IP STA o desde la IP del AP.");
+      } else {
+        Serial.println();
+        Serial.println("⚠️ No se pudo conectar a la WiFi como STA. Manteniendo AP activo.");
+      }
+    }
+    // --- Fin nuevo bloque ---
+    
     mqttBrokerManager = new MQTTBrokerManager(wifiManager, nullptr);  // Temporal sin DeviceManager
 
     eepromManager = new EEPROMManager(); // Instancia antes de DeviceManager
