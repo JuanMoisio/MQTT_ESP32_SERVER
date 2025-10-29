@@ -5,12 +5,25 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "../../include/config.h"
+#include <map>
 
 // Forward declarations
 class DeviceManager;
 class WiFiManager;
 
 class MQTTBrokerManager {
+public:
+    // Buffer de respuestas actions_response por módulo
+    std::map<String, JsonDocument> actionsResponseBuffer;
+    // Método para consultar la última respuesta de acciones de un módulo
+    bool getLastActionsResponse(const String& moduleId, JsonDocument& outDoc) {
+        auto it = actionsResponseBuffer.find(moduleId);
+        if (it != actionsResponseBuffer.end()) {
+            outDoc = it->second;
+            return true;
+        }
+        return false;
+    }
 public:
     MQTTBrokerManager(WiFiManager* wifiMgr, DeviceManager* deviceMgr);
     

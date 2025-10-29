@@ -707,72 +707,65 @@ def main():
     print("=" * 60)
     print(f"{Colors.END}")
     
-    # Detectar dispositivos automáticamente
-    detected_ports = detect_esp32_devices()
-    
-    # Verificar que se detectaron ambos dispositivos
-    if not detected_ports["ESP32-C3"]:
-        print(f"{Colors.RED}❌ ESP32-C3 no detectado. Verifica conexión USB.{Colors.END}")
-        return False
-        
-    if not detected_ports["ESP32-WROOM"]:
-        print(f"{Colors.RED}❌ ESP32-WROOM no detectado. Verifica conexión USB.{Colors.END}")
-        return False
-    
-    print(f"\n{Colors.GREEN}✅ Dispositivos detectados:{Colors.END}")
-    print(f"{Colors.CYAN}   🔷 ESP32-C3 (SERVER): {detected_ports['ESP32-C3']}{Colors.END}")
-    print(f"{Colors.GREEN}   🔶 ESP32-WROOM (CLIENT): {detected_ports['ESP32-WROOM']}{Colors.END}")
-    
+    # Intentar detectar al menos un dispositivo en bucle
+    while True:
+        detected_ports = detect_esp32_devices()
+        found = False
+        if detected_ports["ESP32-C3"]:
+            print(f"✅ ESP32-C3 detectado: {detected_ports['ESP32-C3']}")
+            found = True
+        if detected_ports["ESP32-WROOM"]:
+            print(f"✅ ESP32-WROOM detectado: {detected_ports['ESP32-WROOM']}")
+            found = True
+        if found:
+            break
+        print(f"{Colors.RED}❌ Ningún ESP32 detectado. Reintentando en 5 segundos...{Colors.END}")
+        time.sleep(5)
     # Limpiar conexiones previas con los puertos detectados
     cleanup_serial_connections(detected_ports)
-    
     # Validar conexiones
     print(f"\n{Colors.YELLOW}🔍 Validando conexiones...{Colors.END}")
-    if not validate_device_connection(detected_ports["ESP32-C3"], "ESP32-C3"):
-        print(f"{Colors.YELLOW}⚠️ Continuando sin validación completa...{Colors.END}")
-    if not validate_device_connection(detected_ports["ESP32-WROOM"], "ESP32-WROOM"):
-        print(f"{Colors.YELLOW}⚠️ Continuando sin validación completa...{Colors.END}")
-    
+    if detected_ports["ESP32-C3"]:
+        validate_device_connection(detected_ports["ESP32-C3"], "ESP32-C3")
+    if detected_ports["ESP32-WROOM"]:
+        validate_device_connection(detected_ports["ESP32-WROOM"], "ESP32-WROOM")
     print(f"\n{Colors.CYAN}🚀 Iniciando monitores...{Colors.END}")
     print(f"{Colors.YELLOW}Presiona Ctrl+C para salir{Colors.END}\n")
-    
     # Crear threads para monitoreo con puertos detectados
-    thread1 = threading.Thread(
-        target=monitor_device,
-        args=(detected_ports["ESP32-C3"], "SERVER", Colors.CYAN),
-        daemon=True
-    )
-    
-    thread2 = threading.Thread(
-        target=monitor_device, 
-        args=(detected_ports["ESP32-WROOM"], "CLIENT", Colors.GREEN),
-        daemon=True
-    )
-    
-    # Iniciar threads
-    thread1.start()
-    thread2.start()
-    
-    # Esperar un poco para que se estabilicen
+    threads = []
+    if detected_ports["ESP32-C3"]:
+        threads.append(threading.Thread(
+            target=monitor_device,
+            args=(detected_ports["ESP32-C3"], "SERVER", Colors.CYAN),
+            daemon=True
+        ))
+    if detected_ports["ESP32-WROOM"]:
+        threads.append(threading.Thread(
+            target=monitor_device, 
+            args=(detected_ports["ESP32-WROOM"], "CLIENT", Colors.GREEN),
+            daemon=True
+        ))
+    for t in threads:
+        t.start()
     time.sleep(2)
-    
-    # Manejar comandos con puertos detectados
     try:
         send_commands(detected_ports)
     except KeyboardInterrupt:
         print(f"\n{Colors.YELLOW}🛑 Cerrando monitor...{Colors.END}")
         print(f"{Colors.BLUE}🧹 Limpiando recursos...{Colors.END}")
         cleanup_serial_connections(detected_ports)
-        
     return True
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print(f"\n{Colors.YELLOW}🛑 Programa interrumpido{Colors.END}")
-        cleanup_serial_connections()
-    except Exception as e:
-        print(f"{Colors.RED}❌ Error: {e}{Colors.END}")
-        cleanup_serial_connections()
-        sys.exit(1)
+    while True:
+        try:
+            main()
+        except KeyboardInterrupt:
+            print(f"\n{Colors.YELLOW}🛑 Programa interrumpido{Colors.END}")
+            cleanup_serial_connections()
+            break
+        except Exception as e:
+            print(f"{Colors.RED}❌ Error: {e}{Colors.END}")
+            cleanup_serial_connections()
+            print(f"{Colors.YELLOW}⏳ Reintentando en 5 segundos...{Colors.END}")
+            time.sleep(5)

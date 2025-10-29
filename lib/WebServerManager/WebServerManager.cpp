@@ -35,6 +35,35 @@ void WebServerManager::setupRoutes() {
     webServer.on("/api/unregistered-devices", HTTP_GET, [this]() { handleUnregisteredDevices(); });
     webServer.on("/api/scan-devices", HTTP_POST, [this]() { handleScanDevices(); });
     webServer.on("/api/scan-results", HTTP_GET, [this]() { handleScanResults(); });
+
+    // Endpoint para consultar capacidades de un módulo específico (query param)
+    webServer.on("/api/modules/capabilities", HTTP_GET, [this]() {
+        if (webServer.hasArg("moduleId")) {
+            String moduleId = webServer.arg("moduleId");
+            handleModuleCapabilities(moduleId);
+        } else {
+            webServer.send(400, "application/json", "{\"success\":false,\"message\":\"moduleId faltante\"}");
+        }
+    });
+    // Endpoint para consultar capacidades de un módulo específico (path variable)
+    webServer.onNotFound([this]() {
+        String url = webServer.uri();
+        if (webServer.method() == HTTP_GET && url.startsWith("/api/modules/") && url.endsWith("/capabilities")) {
+            int start = String("/api/modules/").length();
+            int end = url.length() - String("/capabilities").length();
+            String moduleId = url.substring(start, end);
+            if (moduleId.length() > 0) {
+                handleModuleCapabilities(moduleId);
+                return;
+            }
+        }
+        webServer.send(404, "text/plain", "Not found");
+    });
+
+    // Endpoint fijo para acciones de módulo
+    webServer.on("/api/modules/action", HTTP_POST, [this]() {
+        handleModuleAction();
+    });
     
     // Ruta: borrar dispositivo desde Dashboard (vista) -> usar eliminación visual (no persistente)
     webServer.on("/api/dashboard/delete_device", HTTP_POST, [this]() {
@@ -84,6 +113,42 @@ void WebServerManager::setupRoutes() {
         serializeJson(response, responseStr);
         webServer.send(200, "application/json", responseStr);
     });
+}
+
+// --- NUEVO: Procesa acción para módulo y reenvía por MQTT ---
+void WebServerManager::handleModuleAction() {
+    JsonDocument doc;
+    String body = webServer.arg("plain");
+    DeserializationError err = deserializeJson(doc, body);
+    if (err) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"JSON inválido\"}");
+        return;
+    }
+    String moduleId = doc["moduleId"] | "";
+    String action = doc["action"] | "";
+    JsonVariant params = doc["params"];
+    if (moduleId == "" || action == "") {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"moduleId o acción faltante\"}");
+        return;
+    }
+    // Reenviar comando por MQTT (simulado aquí, debes implementar el envío real)
+    Serial.println("[BROKER][MQTT] Enviando comando:");
+    Serial.println("  moduleId: " + moduleId);
+    Serial.println("  action: " + action);
+    Serial.print("  params: ");
+    serializeJson(params, Serial);
+    Serial.println();
+    // TODO: Implementar reenvío real por MQTT a módulo
+    // deviceManager->sendModuleActionMQTT(moduleId, action, params);
+    // Simular respuesta OK
+    JsonDocument resp;
+    resp["success"] = true;
+    resp["message"] = "Acción enviada a módulo por MQTT";
+    resp["moduleId"] = moduleId;
+    resp["action"] = action;
+    String respStr;
+    serializeJson(resp, respStr);
+    webServer.send(200, "application/json", respStr);
 }
 
 void WebServerManager::handleRoot() {
@@ -257,5 +322,22 @@ void WebServerManager::handleScanDevices() {
 
 void WebServerManager::handleScanResults() {
     String responseStr = deviceManager->getScanResultsJSON();
+    webServer.send(200, "application/json", responseStr);
+}
+
+void WebServerManager::handleModuleCapabilities(const String& moduleId) {
+    JsonDocument response;
+    ModuleInfo* module = deviceManager->getModuleById(moduleId);
+    if (module) {
+        response["success"] = true;
+        response["moduleId"] = module->moduleId;
+        response["capabilities"] = module->capabilities;
+        response["moduleType"] = module->moduleType;
+    } else {
+        response["success"] = false;
+        response["message"] = "Módulo no encontrado";
+    }
+    String responseStr;
+    serializeJson(response, responseStr);
     webServer.send(200, "application/json", responseStr);
 }

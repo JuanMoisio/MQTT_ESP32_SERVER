@@ -92,13 +92,13 @@ public:
     String getUnregisteredDevicesJSON();
     String getScanResultsJSON();
     String getLastMacJSON();
-    
     // Getters
     int getRegisteredModulesCount() { return registeredModules.size(); }
     int getAuthorizedDevicesCount() { return authorizedDevices.size(); }
     int getConnectedClientsCount();
     int getScannedCount();
     String getModuleIdByMac(const String& macAddress);
+    ModuleInfo* getModuleById(const String& moduleId);
     
     // Debug methods
     void printRegisteredModules();

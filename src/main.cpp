@@ -1,11 +1,12 @@
 #include <Arduino.h>
-#include <WiFi.h> // <-- Moved here (required for AP+STA)
+#include <WiFi.h> 
 #include "config.h"
 #include "WiFiManager.h"
 #include "WebServerManager.h"
 #include "MQTTBrokerManager.h"
 #include "DeviceManager.h"
 #include "EEPROMManager.h"
+
 
 
 
@@ -17,76 +18,52 @@ DeviceManager* deviceManager;
 EEPROMManager* eepromManager;
 
 void setup() {
-    // Inicializar Serial para ESP32-C3 con USB CDC
-    Serial.begin(SERIAL_BAUDRATE);
-    
-    // Esperar a que se establezca la conexión USB CDC
-    while (!Serial && millis() < 5000) {
-        delay(10);
-    }
-    
-    delay(500);  // Estabilización adicional
-    
-    Serial.println();
-    Serial.println("==============================================");
-    Serial.println("🚀 Iniciando Broker MQTT Modular");
-    Serial.println("==============================================");
-    
-    // Inicializar managers en orden
-    wifiManager = new WiFiManager();
-    wifiManager->initialize();
+  Serial.begin(SERIAL_BAUDRATE);
+  while (!Serial && millis() < 5000) delay(10);
+  delay(200);
 
-    // --- Mantener AP y (opcionalmente) conectar como STA a la misma red ---
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP(AP_SSID, AP_PASSWORD);
-    Serial.print("🔌 Access Point activo: ");
-    Serial.println(AP_SSID);
-    Serial.print("AP IP: ");
-    Serial.println(WiFi.softAPIP().toString());
+  Serial.println();
+  Serial.println("==============================================");
+  Serial.println("🚀 Iniciando Broker MQTT Modular");
+  Serial.println("==============================================");
 
-    // Si ENABLE_STATION_MODE == true intentará conectar como cliente a tu red
-    if (ENABLE_STATION_MODE) {
-      Serial.print("🌐 Intentando conectar como STA a: ");
-      Serial.println(WIFI_SSID);
+  // 1) Wi-Fi (único lugar): NO volver a tocar WiFi.mode/softAP en main
+  WiFiManager::ApConfig apCfg;
+  apCfg.ssid    = AP_SSID;        // ej: "DEPOSITO_BROKER"
+  apCfg.password= AP_PASSWORD;    // ej: "deposito123"
+  apCfg.ip      = IPAddress(AP_IP_ADDR);       // ej: 192,168,4,1
+  apCfg.gateway = IPAddress(AP_GATEWAY_ADDR);  // ej: 192,168,4,1
+  apCfg.subnet  = IPAddress(AP_SUBNET_ADDR);   // ej: 255,255,255,0
 
-      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  #if ENABLE_STATION_MODE
+    WiFiManager::StaConfig staCfg;
+    staCfg.ssid     = WIFI_SSID;
+    staCfg.password = WIFI_PASSWORD;
+    wifiManager = new WiFiManager(WiFiManager::AP_STA, apCfg, staCfg);
+  #else
+    wifiManager = new WiFiManager(WiFiManager::AP_ONLY, apCfg, WiFiManager::StaConfig());
+  #endif
+  wifiManager->initialize(15000); // timeout STA 15s
 
-      unsigned long start = millis();
-      const unsigned long timeout = 15000; // 15s máximo (ajustable)
-      while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeout) {
-        delay(500);
-        Serial.print(".");
-      }
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.println();
-        Serial.print("✅ Conectado a WiFi. STA IP: ");
-        Serial.println(WiFi.localIP().toString());
-        Serial.println("➡️ Puedes acceder al dashboard desde la IP STA o desde la IP del AP.");
-      } else {
-        Serial.println();
-        Serial.println("⚠️ No se pudo conectar a la WiFi como STA. Manteniendo AP activo.");
-      }
-    }
-    // --- Fin nuevo bloque ---
-    
-    mqttBrokerManager = new MQTTBrokerManager(wifiManager, nullptr);  // Temporal sin DeviceManager
 
-    eepromManager = new EEPROMManager(); // Instancia antes de DeviceManager
-    eepromManager->begin();
-    deviceManager = new DeviceManager(wifiManager, mqttBrokerManager, eepromManager); // Pasa el puntero
-    deviceManager->initialize();
-    
-    // Ahora conectar DeviceManager con MQTTBrokerManager
-    mqttBrokerManager->setDeviceManager(deviceManager);
-    mqttBrokerManager->initialize();
-    
-    webServerManager = new WebServerManager(wifiManager, deviceManager);
-    webServerManager->initialize();
-    
+  // 2) MQTT broker (inyectando wifiManager)
+  mqttBrokerManager = new MQTTBrokerManager(wifiManager, nullptr); // DeviceManager aún no
+  // 3) EEPROM
+  eepromManager = new EEPROMManager();
+  eepromManager->begin();
+  // 4) Devices
+  deviceManager = new DeviceManager(wifiManager, mqttBrokerManager, eepromManager);
+  deviceManager->initialize();
+  // Conectar los dos mundos
+  mqttBrokerManager->setDeviceManager(deviceManager);
+  mqttBrokerManager->initialize();
 
-    
-    Serial.println("✅ Sistema modular listo");
-    Serial.println("==============================================");
+  // 5) Web server
+  webServerManager = new WebServerManager(wifiManager, deviceManager);
+  webServerManager->initialize();
+
+  Serial.println("✅ Sistema modular listo");
+  Serial.println("==============================================");
 }
 
 void loop() {
@@ -110,7 +87,3 @@ void loop() {
     
     delay(10);
 }
-
-// Elimina las siguientes funciones de main.cpp:
-// void EEPROMManager::writeTestByte(uint8_t value) { ... }
-// uint8_t EEPROMManager::readTestByte() { ... }

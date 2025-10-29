@@ -39,6 +39,7 @@ private:
     
     // Handlers de rutas
     void handleRoot();
+    void handleModuleAction();
     void handleAdmin();
     void handleSystemInfo();
     void handleLogin();
@@ -52,6 +53,7 @@ private:
     void handleUnregisteredDevices();
     void handleScanDevices();
     void handleScanResults();
+    void handleModuleCapabilities(const String& moduleId);
 };
 
 #endif

@@ -228,6 +228,38 @@ void MQTTBrokerManager::processMessage(int clientIndex, String message) {
         deviceManager->handleDeviceRegistration(clientIndex, doc);
     } else if (type == "module_registration") {
         handleModuleRegistration(clientIndex, doc);
+    } else if (type == "get_actions") {
+        // Solicitud de acciones disponibles de un módulo
+        String targetModuleId = doc["module_id"];
+        Serial.println("🔍 Solicitud de acciones para módulo: " + targetModuleId);
+        // Buscar cliente conectado para ese módulo
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (clientConnected[i]) {
+                // Aquí podrías tener una mejor asociación módulo <-> cliente
+                // Por ahora, reenviamos a todos los clientes conectados
+                JsonDocument getActionsMsg;
+                getActionsMsg["type"] = "get_actions";
+                getActionsMsg["module_id"] = targetModuleId;
+                getActionsMsg["requester_index"] = clientIndex;
+                getActionsMsg["timestamp"] = millis();
+                String getActionsStr;
+                serializeJson(getActionsMsg, getActionsStr);
+                mqttClients[i].println(getActionsStr);
+            }
+        }
+    } else if (type == "actions_response") {
+        // Guardar respuesta en el buffer por module_id
+        String moduleId = doc["module_id"];
+        actionsResponseBuffer[moduleId] = doc;
+        int requesterIndex = doc["requester_index"] | -1;
+        if (requesterIndex >= 0 && requesterIndex < MAX_CLIENTS && clientConnected[requesterIndex]) {
+            Serial.println("📤 Reenviando actions_response al cliente solicitante: " + String(requesterIndex));
+            String actionsStr;
+            serializeJson(doc, actionsStr);
+            mqttClients[requesterIndex].println(actionsStr);
+        } else {
+            Serial.println("⚠️ requester_index inválido o cliente no conectado");
+        }
     } else {
         Serial.println("❓ Tipo de mensaje no reconocido: '" + type + "' - reenviando a suscriptores");
         // Reenviar mensaje a suscriptores

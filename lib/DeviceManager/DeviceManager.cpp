@@ -471,7 +471,19 @@ String DeviceManager::getDevicesJSON() {
 String DeviceManager::getModulesJSON() {
     JsonDocument response;
     JsonArray modulesArray = response["modules"].to<JsonArray>();
-    
+
+    Serial.print("[DeviceManager] registeredModules size: ");
+    Serial.println(registeredModules.size());
+    if (registeredModules.size() == 0) {
+        Serial.println("[DeviceManager] No hay módulos registrados.");
+    } else {
+        Serial.println("[DeviceManager] Módulos registrados:");
+        for (auto& pair : registeredModules) {
+            Serial.print("  - moduleId: ");
+            Serial.println(pair.second.moduleId);
+        }
+    }
+
     for (auto& pair : registeredModules) {
         ModuleInfo& module = pair.second;
         JsonObject moduleObj = modulesArray.add<JsonObject>();
@@ -483,9 +495,11 @@ String DeviceManager::getModulesJSON() {
         moduleObj["isAuthenticated"] = module.isAuthenticated;
         moduleObj["lastHeartbeat"] = module.lastHeartbeat;
     }
-    
+
     String responseStr;
     serializeJson(response, responseStr);
+    Serial.print("[DeviceManager] getModulesJSON response: ");
+    Serial.println(responseStr);
     return responseStr;
 }
 
@@ -827,4 +841,12 @@ void DeviceManager::printRegisteredModules() {
         Serial.println(pair.second.macAddress);
     }
     Serial.println("===========================");
+}
+
+ModuleInfo* DeviceManager::getModuleById(const String& moduleId) {
+    auto it = registeredModules.find(moduleId);
+    if (it != registeredModules.end()) {
+        return &(it->second);
+    }
+    return nullptr;
 }

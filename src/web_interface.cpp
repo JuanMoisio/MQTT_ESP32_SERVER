@@ -835,7 +835,7 @@ function displayModules(modules) {
       const shownName = module.displayName || module.registeredName || module.label || module.friendlyName || module.deviceName || module.name || module.description || module.moduleId;
 
       html += `
-        <div class="device-card" data-module-id="${module.moduleId}" data-mac="${module.macAddress || ''}">
+        <div class="device-card" data-module-id="${module.moduleId}" data-mac="${module.macAddress || ''}" data-type="${module.moduleType || ''}">
           <div class="device-header">
             <div class="device-id">${shownName}</div>
             <div style="display:flex;align-items:center;gap:8px">
@@ -1329,76 +1329,204 @@ function openModuleMenu(moduleId) {
   if (card) {
     const idEl = card.querySelector('.device-id');
     name = idEl ? idEl.textContent : moduleId;
-    mac = card.getAttribute('data-mac') || card.querySelector('.device-details .device-details') || '';
+    mac = card.getAttribute('data-mac') || '';
   }
 
   titleEl.textContent = `Acciones — ${name}`;
-  // Plantilla simple de acciones (placeholder). Más acciones por tipo se podrán añadir después.
-  bodyEl.innerHTML = `
-    <div style="margin-top:6px">
-      <div style="margin-bottom:8px;color:#333"><strong>ID:</strong> ${moduleId}</div>
-      <div style="margin-bottom:8px;color:#333"><strong>MAC:</strong> ${mac || 'N/A'}</div>
-      <button class="btn btn-small" onclick="actionViewModule('${moduleId}')">Ver detalles</button>
-      <button class="btn btn-small" style="margin-top:6px" onclick="actionRefreshModule('${moduleId}')">Refrescar estado</button>
-      <button class="btn btn-danger" style="margin-top:8px" onclick="deleteModule('${moduleId}')">Eliminar (persistente)</button>
-    </div>
-  `;
 
+  // Mostrar estado de carga y luego pedir capacidades al servidor
+  bodyEl.innerHTML = '<div style="color:#666;margin:8px 0">Cargando funcionalidades...</div>';
+
+  // Endpoint esperado: GET /api/modules/{moduleId}/capabilities
+  fetch('/api/modules/' + encodeURIComponent(moduleId) + '/capabilities', { method: 'GET' })
+    .then(r => r.json().catch(()=>({success:false})))
+    .then(data => {
+      // Estructura esperada: { success: true, capabilities: [...] }
+      if (data && data.success && Array.isArray(data.capabilities) && data.capabilities.length > 0) {
+        let html = `<div style="margin-top:6px">
+                      <div style="margin-bottom:8px;color:#333"><strong>ID:</strong> ${moduleId}</div>
+                      <div style="margin-bottom:8px;color:#333"><strong>MAC:</strong> ${mac || 'N/A'}</div>
+                      <div style="margin:8px 0"><strong>Funciones disponibles:</strong></div>
+                      <div style="display:flex;flex-direction:column;gap:8px">`;
+        data.capabilities.forEach(cap => {
+          const capTitle = cap.title || cap.name;
+          const capDesc = cap.description ? `<div style="font-size:12px;color:#666;margin-top:4px">${cap.description}</div>` : '';
+          html += `
+            <div style="border:1px solid #eee;padding:8px;border-radius:6px">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <div>
+                  <div style="font-weight:700">${capTitle}</div>
+                  ${capDesc}
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <button class="btn btn-small" onclick="executeCapability('${moduleId}','${encodeURIComponent(cap.name)}')">Ejecutar</button>
+                </div>
+              </div>
+            </div>
+          `;
+        });
+        html += `</div>
+                 <div style="margin-top:10px">
+                   <button class="btn btn-danger" onclick="deleteModule('${moduleId}')">Eliminar (persistente)</button>
+                 </div>
+                </div>`;
+        bodyEl.innerHTML = html;
+      } else {
+        // Fallback local: intentar inferir capacidades por tipo de módulo
+        const card = document.querySelector(`[data-module-id="${moduleId}"]`);
+        const modType = card ? (card.getAttribute('data-type') || '').toLowerCase() : '';
+        // Mapa de capacidades por tipo (añadir más tipos si hace falta)
+        const typeCapabilities = {
+          'fingerprint': [
+            { name: 'enroll', title: 'Registrar Huella', description: 'Registrar una nueva huella', params: [] },
+            { name: 'scan',   title: 'Escanear Huella',  description: 'Forzar escaneo ahora', params: [] },
+            { name: 'delete', title: 'Eliminar Huella', description: 'Eliminar huella por ID', params: [{ name: 'id', type: 'number', required: true }] }
+          ],
+          'rfid': [
+            { name: 'scan', title: 'Escanear RFID', description: 'Forzar escaneo RFID', params: [] },
+            { name: 'delete', title: 'Eliminar tag', description: 'Eliminar tag registrado', params: [{ name: 'mac', type: 'string', required: true }] }
+          ]
+        };
+
+        const caps = typeCapabilities[modType] || null;
+
+        if (caps) {
+          let html = `<div style="margin-top:6px">
+                        <div style="margin-bottom:8px;color:#333"><strong>ID:</strong> ${moduleId}</div>
+                        <div style="margin-bottom:8px;color:#333"><strong>MAC:</strong> ${mac || 'N/A'}</div>
+                        <div style="margin:8px 0"><strong>Funciones disponibles (por tipo: ${modType}):</strong></div>
+                        <div style="display:flex;flex-direction:column;gap:8px">`;
+          caps.forEach(cap => {
+            const capTitle = cap.title || cap.name;
+            const capDesc = cap.description ? `<div style="font-size:12px;color:#666;margin-top:4px">${cap.description}</div>` : '';
+            html += `
+              <div style="border:1px solid #eee;padding:8px;border-radius:6px">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                  <div>
+                    <div style="font-weight:700">${capTitle}</div>
+                    ${capDesc}
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:6px">
+                    <button class="btn btn-small" onclick="executeCapability('${moduleId}','${encodeURIComponent(cap.name)}')">Ejecutar</button>
+                  </div>
+                </div>
+              </div>
+            `;
+          });
+          html += `</div>
+                   <div style="margin-top:10px">
+                     <button class="btn btn-danger" onclick="deleteModule('${moduleId}')">Eliminar (persistente)</button>
+                   </div>
+                  </div>`;
+          bodyEl.innerHTML = html;
+        } else {
+          // Ningún fallback conocido: mostrar mensaje original
+          bodyEl.innerHTML = `
+            <div style="margin-top:6px">
+              <div style="margin-bottom:8px;color:#333"><strong>ID:</strong> ${moduleId}</div>
+              <div style="margin-bottom:8px;color:#333"><strong>MAC:</strong> ${mac || 'N/A'}</div>
+              <p style="color:#666;margin:8px 0">No se encontraron funcionalidades en el servidor para este módulo.</p>
+              <button class="btn btn-small" onclick="actionRefreshModule('${moduleId}')">Refrescar estado</button>
+            </div>
+          `;
+        }
+      }
+    })
+    .catch(err => {
+      // En caso de error de comunicación, intentar también el fallback por tipo
+      console.error('Error obteniendo capacidades:', err);
+      const card = document.querySelector(`[data-module-id="${moduleId}"]`);
+      const modType = card ? (card.getAttribute('data-type') || '').toLowerCase() : '';
+      const typeCapabilities = {
+        'fingerprint': [
+          { name: 'enroll', title: 'Registrar Huella', description: 'Registrar una nueva huella', params: [] },
+          { name: 'scan',   title: 'Escanear Huella',  description: 'Forzar escaneo ahora', params: [] },
+          { name: 'delete', title: 'Eliminar Huella', description: 'Eliminar huella por ID', params: [{ name: 'id', type: 'number', required: true }] }
+        ],
+        'rfid': [
+          { name: 'scan', title: 'Escanear RFID', description: 'Forzar escaneo RFID', params: [] },
+          { name: 'delete', title: 'Eliminar tag', description: 'Eliminar tag registrado', params: [{ name: 'mac', type: 'string', required: true }] }
+        ]
+      };
+      const caps = typeCapabilities[modType] || null;
+      if (caps) {
+        let html = `<div style="margin-top:6px">
+                      <div style="margin-bottom:8px;color:#333"><strong>ID:</strong> ${moduleId}</div>
+                      <div style="margin-bottom:8px;color:#333"><strong>MAC:</strong> ${mac || 'N/A'}</div>
+                      <div style="margin:8px 0"><strong>Funciones disponibles (por tipo: ${modType}):</strong></div>
+                      <div style="display:flex;flex-direction:column;gap:8px">`;
+        caps.forEach(cap => {
+          const capTitle = cap.title || cap.name;
+          const capDesc = cap.description ? `<div style="font-size:12px;color:#666;margin-top:4px">${cap.description}</div>` : '';
+          html += `
+            <div style="border:1px solid #eee;padding:8px;border-radius:6px">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <div>
+                  <div style="font-weight:700">${capTitle}</div>
+                  ${capDesc}
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <button class="btn btn-small" onclick="executeCapability('${moduleId}','${encodeURIComponent(cap.name)}')">Ejecutar</button>
+                </div>
+              </div>
+            </div>
+          `;
+        });
+        html += `</div>
+                 <div style="margin-top:10px">
+                   <button class="btn btn-danger" onclick="deleteModule('${moduleId}')">Eliminar (persistente)</button>
+                 </div>
+                </div>`;
+        bodyEl.innerHTML = html;
+      } else {
+        bodyEl.innerHTML = `
+          <div style="margin-top:6px">
+            <div style="margin-bottom:8px;color:#333"><strong>ID:</strong> ${moduleId}</div>
+            <div style="margin-bottom:8px;color:#333"><strong>MAC:</strong> ${mac || 'N/A'}</div>
+            <p style="color:#b21;margin:8px 0">No se pudo cargar las funcionalidades (error de comunicación).</p>
+            <button class="btn btn-small" onclick="actionRefreshModule('${moduleId}')">Reintentar</button>
+          </div>
+        `;
+      }
+    });
   menu.classList.add('show');
   menu.setAttribute('aria-hidden', 'false');
 }
 
-function closeModuleMenu() {
-  const menu = document.getElementById('moduleMenu');
-  if (!menu) return;
-  menu.classList.remove('show');
-  menu.setAttribute('aria-hidden', 'true');
-}
-
-/* Placeholders para acciones (puedes implementar la lógica real luego) */
-function actionViewModule(moduleId) {
-  closeModuleMenu();
-  // Navegar a dashboard y destacar si tiene MAC
-  const card = document.querySelector(`[data-module-id="${moduleId}"]`);
-  const mac = card ? card.getAttribute('data-mac') : null;
-  if (mac) {
-    viewDeviceDetails(mac);
-  } else {
-    showMessage('No hay MAC disponible para ' + moduleId, true);
-  }
-}
-
-function actionRefreshModule(moduleId) {
-  closeModuleMenu();
-  showMessage('Solicitando refresh para ' + moduleId + ' ...', false);
-  // Llamada placeholder al endpoint de refresh (si existe)
-  fetch('/api/modules/refresh', {
+/* Nueva función: ejecutar comando en módulo vía servidor */
+function sendModuleCommand(moduleId, commandName, params = {}) {
+  showMessage('Enviando comando ' + commandName + ' a ' + moduleId + ' ...', false);
+  return fetch('/api/modules/action', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'module_id=' + encodeURIComponent(moduleId)
-  }).then(r => r.json().catch(()=>({success:false}))).then(d => {
-    if (d.success) {
-      showMessage('Refresh solicitado', false);
-      loadModules();
-    } else {
-      showMessage('Refresh falló', true);
-    }
-  }).catch(e => {
-    console.error('actionRefreshModule error', e);
-    showMessage('Error solicitando refresh', true);
-  });
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ moduleId, action: commandName, params })
+  }).then(r => r.json().catch(()=>({ success:false })))
+    .then(res => {
+      if (res && res.success) {
+        showMessage('Comando ejecutado correctamente', false);
+      } else {
+        showMessage('Error ejecutando comando: ' + (res.message || 'sin detalle'), true);
+      }
+      // refrescar estado de módulos por si cambió
+      loadModules().catch(()=>{});
+      return res;
+    })
+    .catch(err => {
+      console.error('sendModuleCommand error', err);
+      showMessage('Error de red al ejecutar comando', true);
+      throw err;
+    });
 }
 
-/* Cerrar menú si se hace click fuera del mismo */
-window.addEventListener('click', function(e) {
-  const menu = document.getElementById('moduleMenu');
-  if (!menu) return;
-  if (menu.classList.contains('show')) {
-    if (!e.target.closest('#moduleMenu') && !e.target.matches('button[onclick^="openModuleMenu"]')) {
-      closeModuleMenu();
-    }
-  }
-});
+/* Helper para llamadas desde UI (decodifica el nombre si fue codificado) */
+function executeCapability(moduleId, encodedCapName) {
+  const capName = decodeURIComponent(encodedCapName);
+  if (!confirm('Ejecutar "' + capName + '" en ' + moduleId + '?')) return;
+  // Para capacidades que requieren parámetros añadir UI adicional; por ahora se envían sin params
+  sendModuleCommand(moduleId, capName, {}).catch(()=>{});
+}
+
+// ...existing code...
 </script>
 </body>
 </html>

@@ -187,17 +187,6 @@
             background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
         }
         
-        .btn-outline {
-            background: transparent;
-            border: 2px solid #4facfe;
-            color: #4facfe;
-        }
-        
-        .btn-outline:hover {
-            background: #4facfe;
-            color: white;
-        }
-        
         select {
             width: 100%;
             padding: 15px;
@@ -359,6 +348,10 @@
                     <div id="consultaStatus" class="status-message" style="display: none;"></div>
                 </div>
                 
+                <!-- Botón para escanear huella en el módulo fingerprint -->
+                <div style="margin: 20px 0;">
+                    <button type="button" id="scanFingerprintBtn" class="btn btn-secondary">🔍 Escanear Huella (Fingerprint)</button>
+                </div>
                 <!-- Lista de dispositivos -->
                 <div id="deviceList"></div>
             </div>
@@ -371,7 +364,6 @@
             .then(response => response.json())
             .then(data => {
                 document.getElementById('brokerIP').textContent = data.ap_ip || 'N/A';
-                
                 const uptime = Math.floor(data.uptime / 1000);
                 const hours = Math.floor(uptime / 3600);
                 const minutes = Math.floor((uptime % 3600) / 60);
@@ -381,6 +373,46 @@
             .catch(error => {
                 console.error('Error obteniendo info del sistema:', error);
             });
+
+        // --- NUEVO: Función para enviar acción a módulo por broker ---
+        function sendModuleAction(moduleId, action, params = {}) {
+            const statusDiv = document.getElementById('consultaStatus');
+            statusDiv.innerHTML = `⏳ Enviando acción <b>${action}</b> a módulo <b>${moduleId}</b>...`;
+            statusDiv.className = 'status-message status-warning';
+            statusDiv.style.display = 'block';
+
+            fetch('/api/modules/action', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ moduleId, action, params })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    statusDiv.innerHTML = `✅ Acción <b>${action}</b> enviada correctamente.<br>Respuesta: <pre>${JSON.stringify(data, null, 2)}</pre>`;
+                    statusDiv.className = 'status-message status-success';
+                } else {
+                    statusDiv.innerHTML = `❌ Error: ${data.message || 'No se pudo ejecutar la acción.'}`;
+                    statusDiv.className = 'status-message status-error';
+                }
+            })
+            .catch(error => {
+                statusDiv.innerHTML = `❌ Error de conexión: ${error}`;
+                statusDiv.className = 'status-message status-error';
+            });
+        }
+
+        // Botón funcional para escanear huella en el módulo fingerprint
+        document.addEventListener('DOMContentLoaded', function() {
+            var scanBtn = document.getElementById('scanFingerprintBtn');
+            if (scanBtn) {
+                scanBtn.addEventListener('click', function() {
+                    sendModuleAction('fingerprint', 'scan');
+                });
+            }
+        });
         
         // Manejar login
         document.getElementById('loginForm').addEventListener('submit', function(e) {
