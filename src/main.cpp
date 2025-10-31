@@ -60,6 +60,8 @@ void setup() {
 
   // 5) Web server
   webServerManager = new WebServerManager(wifiManager, deviceManager);
+  // Inyectar mqttBrokerManager para que WebServer pueda enviar comandos a módulos si hace falta
+  webServerManager->setMQTTBrokerManager(mqttBrokerManager);
   webServerManager->initialize();
 
   Serial.println("✅ Sistema modular listo");

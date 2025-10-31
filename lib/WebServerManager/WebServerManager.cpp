@@ -1,9 +1,15 @@
 #include "WebServerManager.h"
 #include "WiFiManager.h"
 #include "DeviceManager.h"
+#include "MQTTBrokerManager.h"
 
 WebServerManager::WebServerManager(WiFiManager* wifiMgr, DeviceManager* deviceMgr) 
-    : webServer(80), wifiManager(wifiMgr), deviceManager(deviceMgr) {
+    : webServer(80), wifiManager(wifiMgr), deviceManager(deviceMgr), mqttBrokerManager(nullptr) {
+}
+
+// Nuevo setter para inyectar MQTTBrokerManager después de la construcción
+void WebServerManager::setMQTTBrokerManager(MQTTBrokerManager* mgr) {
+    this->mqttBrokerManager = mgr;
 }
 
 void WebServerManager::initialize() {
@@ -36,6 +42,54 @@ void WebServerManager::setupRoutes() {
     webServer.on("/api/scan-devices", HTTP_POST, [this]() { handleScanDevices(); });
     webServer.on("/api/scan-results", HTTP_GET, [this]() { handleScanResults(); });
 
+    // Debug endpoint: estado completo para inspección remota
+    webServer.on("/api/debug/state", HTTP_GET, [this]() {
+        Serial.println("[WebServer] /api/debug/state called");
+        String responseStr = deviceManager->getDebugJSON();
+        webServer.send(200, "application/json", responseStr);
+    });
+
+    // --- NUEVO: Endpoint para desregistrar módulo ---
+    webServer.on("/api/modules/deregister", HTTP_POST, [this]() {
+        DynamicJsonDocument response(512);
+        String moduleId = "";
+
+        // Aceptar moduleId y module_id (form)
+        if (webServer.hasArg("moduleId")) {
+            moduleId = webServer.arg("moduleId");
+        } else if (webServer.hasArg("module_id")) {
+            moduleId = webServer.arg("module_id");
+        } else {
+            // Intentar parsear JSON desde body (moduleId o module_id)
+            String body = webServer.arg("plain");
+            if (body.length() > 0) {
+                DynamicJsonDocument doc(512);
+                DeserializationError err = deserializeJson(doc, body);
+                if (!err) {
+                    if (doc.containsKey("moduleId")) {
+                        moduleId = String((const char*)doc["moduleId"]);
+                    } else if (doc.containsKey("module_id")) {
+                        moduleId = String((const char*)doc["module_id"]);
+                    }
+                }
+            }
+        }
+
+        if (moduleId.length() == 0) {
+            response["success"] = false;
+            response["message"] = "moduleId faltante";
+        } else {
+            bool ok = deviceManager->deregisterModule(moduleId);
+            response["success"] = ok;
+            response["message"] = ok ? "Módulo eliminado correctamente" : "No se encontró el módulo";
+            response["moduleId"] = moduleId;
+        }
+
+        String responseStr;
+        serializeJson(response, responseStr);
+        webServer.send(200, "application/json", responseStr);
+    });
+
     // Endpoint para consultar capacidades de un módulo específico (query param)
     webServer.on("/api/modules/capabilities", HTTP_GET, [this]() {
         if (webServer.hasArg("moduleId")) {
@@ -67,21 +121,36 @@ void WebServerManager::setupRoutes() {
     
     // Ruta: borrar dispositivo desde Dashboard (vista) -> usar eliminación visual (no persistente)
     webServer.on("/api/dashboard/delete_device", HTTP_POST, [this]() {
-        JsonDocument response;
-        
+        DynamicJsonDocument response(512);
+
+        String macAddress = "";
+        // Prefer form param
         if (webServer.hasArg("macAddress")) {
-            String macAddress = webServer.arg("macAddress");
-            
+            macAddress = webServer.arg("macAddress");
+        } else {
+            // Intentar parsear JSON desde body
+            String body = webServer.arg("plain");
+            if (body.length() > 0) {
+                DynamicJsonDocument doc(512);
+                DeserializationError err = deserializeJson(doc, body);
+                if (!err && doc.containsKey("macAddress")) {
+                    macAddress = String((const char*)doc["macAddress"]);
+                }
+            }
+        }
+
+        if (macAddress.length() > 0) {
             deviceManager->removeDeviceVisual(macAddress); // <<-- cambio: solo visual
             Serial.println("[WebServer] Petición dashboard delete -> removeDeviceVisual: " + macAddress);
-            
+
             response["success"] = true;
             response["message"] = "Dispositivo eliminado (visual)";
+            response["macAddress"] = macAddress;
         } else {
             response["success"] = false;
             response["message"] = "MAC address faltante";
         }
-        
+
         String responseStr;
         serializeJson(response, responseStr);
         webServer.send(200, "application/json", responseStr);
@@ -89,14 +158,49 @@ void WebServerManager::setupRoutes() {
 
     // Ruta: borrar dispositivo desde Módulos (administración) -> borrado persistente
     webServer.on("/api/modules/delete_device", HTTP_POST, [this]() {
-        JsonDocument response;
-        
+        DynamicJsonDocument response(512);
+
+        String macAddress = "";
+        // Prefer form param directo
         if (webServer.hasArg("macAddress")) {
-            String macAddress = webServer.arg("macAddress");
-            
+            macAddress = webServer.arg("macAddress");
+        }
+
+        // Si no vino MAC, intentar obtener moduleId/module_id y mapear a MAC
+        String moduleId = "";
+        if (macAddress.length() == 0) {
+            if (webServer.hasArg("moduleId"))       moduleId = webServer.arg("moduleId");
+            else if (webServer.hasArg("module_id")) moduleId = webServer.arg("module_id");
+        }
+
+        // Parsear JSON si hace falta
+        if (macAddress.length() == 0 && moduleId.length() == 0) {
+            String body = webServer.arg("plain");
+            if (body.length() > 0) {
+                DynamicJsonDocument doc(512);
+                DeserializationError err = deserializeJson(doc, body);
+                if (!err) {
+                    if (doc.containsKey("macAddress")) {
+                        macAddress = String((const char*)doc["macAddress"]);
+                    } else if (doc.containsKey("moduleId")) {
+                        moduleId = String((const char*)doc["moduleId"]);
+                    } else if (doc.containsKey("module_id")) {
+                        moduleId = String((const char*)doc["module_id"]);
+                    }
+                }
+            }
+        }
+
+        // Si tengo moduleId pero no MAC, lo resuelvo con DeviceManager
+        if (macAddress.length() == 0 && moduleId.length() > 0) {
+            ModuleInfo* mod = deviceManager->getModuleById(moduleId);
+            if (mod) macAddress = mod->macAddress;
+        }
+
+        if (macAddress.length() > 0) {
             bool ok = deviceManager->removeDevice(macAddress); // <<-- persistente (modifica EEPROM)
             Serial.println("[WebServer] Petición modules delete -> removeDevice (persist): " + macAddress + " result=" + String(ok));
-            
+
             if (ok) {
                 response["success"] = true;
                 response["message"] = "Dispositivo eliminado (persistente)";
@@ -104,50 +208,53 @@ void WebServerManager::setupRoutes() {
                 response["success"] = false;
                 response["message"] = "Dispositivo no encontrado";
             }
+            response["macAddress"] = macAddress;
         } else {
             response["success"] = false;
-            response["message"] = "MAC address faltante";
+            response["message"] = "MAC address faltante (no se pudo resolver desde moduleId)";
         }
-        
+
         String responseStr;
         serializeJson(response, responseStr);
         webServer.send(200, "application/json", responseStr);
     });
-}
+
+} // end setupRoutes()
 
 // --- NUEVO: Procesa acción para módulo y reenvía por MQTT ---
 void WebServerManager::handleModuleAction() {
-    JsonDocument doc;
+    DynamicJsonDocument doc(1024);
     String body = webServer.arg("plain");
     DeserializationError err = deserializeJson(doc, body);
-    if (err) {
-        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"JSON inválido\"}");
-        return;
-    }
+    if (err) { webServer.send(400, "application/json", "{\"success\":false,\"message\":\"JSON inválido\"}"); return; }
+
     String moduleId = doc["moduleId"] | "";
-    String action = doc["action"] | "";
-    JsonVariant params = doc["params"];
+    String action   = doc["action"]   | "";
+    JsonVariant params = doc["params"]; // puede ser null
+
     if (moduleId == "" || action == "") {
         webServer.send(400, "application/json", "{\"success\":false,\"message\":\"moduleId o acción faltante\"}");
         return;
     }
-    // Reenviar comando por MQTT (simulado aquí, debes implementar el envío real)
+
     Serial.println("[BROKER][MQTT] Enviando comando:");
     Serial.println("  moduleId: " + moduleId);
     Serial.println("  action: " + action);
-    Serial.print("  params: ");
-    serializeJson(params, Serial);
-    Serial.println();
-    // TODO: Implementar reenvío real por MQTT a módulo
-    // deviceManager->sendModuleActionMQTT(moduleId, action, params);
-    // Simular respuesta OK
-    JsonDocument resp;
-    resp["success"] = true;
-    resp["message"] = "Acción enviada a módulo por MQTT";
+    Serial.print  ("  params: ");
+    serializeJson(params, Serial); Serial.println();
+
+    bool ok = false;
+    if (mqttBrokerManager) {
+        // >>> Reenvío REAL al broker, con params <<<
+        ok = mqttBrokerManager->sendCommandToModule(moduleId, action, params);
+    }
+
+    DynamicJsonDocument resp(256);
+    resp["success"] = ok;
+    resp["message"] = ok ? "Acción enviada a módulo por broker" : "No se pudo enviar la acción (broker no disponible)";
     resp["moduleId"] = moduleId;
-    resp["action"] = action;
-    String respStr;
-    serializeJson(resp, respStr);
+    resp["action"]   = action;
+    String respStr; serializeJson(resp, respStr);
     webServer.send(200, "application/json", respStr);
 }
 
@@ -160,7 +267,7 @@ void WebServerManager::handleAdmin() {
 }
 
 void WebServerManager::handleSystemInfo() {
-    JsonDocument response;
+    DynamicJsonDocument response(256);
     response["ap_ip"] = wifiManager->getAPIP();
     response["uptime"] = millis();
     response["free_heap"] = ESP.getFreeHeap();
@@ -174,7 +281,7 @@ void WebServerManager::handleSystemInfo() {
 }
 
 void WebServerManager::handleLogin() {
-    JsonDocument response;
+    DynamicJsonDocument response(256);
     
     if (webServer.hasArg("username") && webServer.hasArg("password")) {
         String username = webServer.arg("username");
@@ -205,7 +312,7 @@ void WebServerManager::handleDevices() {
 }
 
 void WebServerManager::handleAddDevice() {
-    JsonDocument response;
+    DynamicJsonDocument response(512);
     
     if (webServer.hasArg("macAddress") && 
         webServer.hasArg("deviceType") &&
@@ -237,7 +344,7 @@ void WebServerManager::handleAddDevice() {
 }
 
 void WebServerManager::handleRemoveDevice() {
-    JsonDocument response;
+    DynamicJsonDocument response(256);
     
     if (webServer.hasArg("macAddress")) {
         String macAddress = webServer.arg("macAddress");
@@ -261,7 +368,7 @@ void WebServerManager::handleRemoveDevice() {
 }
 
 void WebServerManager::handleRequestMac() {
-    JsonDocument response;
+    DynamicJsonDocument response(512);
     
     Serial.println("🌐 API consulta recibida desde web");
     
@@ -304,7 +411,7 @@ void WebServerManager::handleUnregisteredDevices() {
 }
 
 void WebServerManager::handleScanDevices() {
-    JsonDocument response;
+    DynamicJsonDocument response(256);
     
     Serial.println("🔍 API scan-devices llamada desde web");
     
@@ -326,7 +433,7 @@ void WebServerManager::handleScanResults() {
 }
 
 void WebServerManager::handleModuleCapabilities(const String& moduleId) {
-    JsonDocument response;
+    DynamicJsonDocument response(512);
     ModuleInfo* module = deviceManager->getModuleById(moduleId);
     if (module) {
         response["success"] = true;

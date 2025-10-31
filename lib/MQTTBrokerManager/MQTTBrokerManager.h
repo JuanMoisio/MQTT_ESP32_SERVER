@@ -2,66 +2,65 @@
 #define MQTT_BROKER_MANAGER_H
 
 #include <Arduino.h>
-#include <WiFi.h>
 #include <ArduinoJson.h>
-#include "../../include/config.h"
 #include <map>
+#include <WiFi.h>
+#include "../../include/config.h"
 
-// Forward declarations
-class DeviceManager;
+// Forward declarations to avoid circular includes
 class WiFiManager;
+class DeviceManager;
+class WebServerManager;
 
 class MQTTBrokerManager {
 public:
-    // Buffer de respuestas actions_response por módulo
-    std::map<String, JsonDocument> actionsResponseBuffer;
-    // Método para consultar la última respuesta de acciones de un módulo
-    bool getLastActionsResponse(const String& moduleId, JsonDocument& outDoc) {
-        auto it = actionsResponseBuffer.find(moduleId);
-        if (it != actionsResponseBuffer.end()) {
-            outDoc = it->second;
-            return true;
-        }
-        return false;
-    }
-public:
+    // Constructor usado en main.cpp (WiFiManager*, DeviceManager*)
     MQTTBrokerManager(WiFiManager* wifiMgr, DeviceManager* deviceMgr);
-    
-    // Métodos públicos
+
+    // Inicialización y loop-related
     void initialize();
-    void setDeviceManager(DeviceManager* deviceMgr);
+    void setDeviceManager(DeviceManager* devMgr);
     void handleNewConnections();
     void processClientMessages();
-    void checkModuleHeartbeats();
     void sendHeartbeatToClients();
-    void sendCommandToModule(const String& moduleId, const String& command);
-    void sendWelcomeMessage(int clientIndex);
-    void sendAuthSuccessMessage(int clientIndex, const String& macAddress, const String& apiKey);
-    void sendToAllClients(const String& message);
-    void sendToClient(int clientIndex, const String& message);
-    String getClientIP(int clientIndex);
+    void checkModuleHeartbeats();
     int getConnectedClientsCount();
-    
-    // Getters para otros managers
-    WiFiClient* getClients() { return mqttClients; }
-    bool* getClientConnections() { return clientConnected; }
-    
+    String getClientIP(int clientIndex);
+
+    // Envíos y utilidades
+    void sendAuthSuccessMessage(int clientIndex, const String& macAddress, const String& apiKey);
+    void sendToClient(int clientIndex, const String& payload);
+    void sendToAllClients(const String& payload);
+
+    // Comandos a módulos (sobrecarga con params)
+    void sendCommandToModule(const String& moduleId, const String& command);
+    bool sendCommandToModule(const String& moduleId, const String& command, JsonVariantConst params);
+
+    // Obtener última respuesta de acciones (serializada en outJson)
+    bool getLastActionsResponse(const String& moduleId, String& outJson);
+
+    // Exponer sendWelcomeMessage (usada internamente)
+    void sendWelcomeMessage(int clientIndex);
+
 private:
-    // Referencias a otros managers
-    WiFiManager* wifiManager;
-    DeviceManager* deviceManager;
-    
-    // Configuración MQTT Broker
-    WiFiServer mqttServer;
+    WiFiManager* wifiManager = nullptr;
+    DeviceManager* deviceManager = nullptr;
+    WebServerManager* webServerManager = nullptr;
+
+    // TCP server + clients
+    WiFiServer mqttServer; // inicializar en cpp ctor: mqttServer(MQTT_PORT)
     WiFiClient mqttClients[MAX_CLIENTS];
     bool clientConnected[MAX_CLIENTS];
     unsigned long lastHeartbeatSent[MAX_CLIENTS];
-    
+
+    // Buffer de respuestas (serializadas) en lugar de JsonDocument
+    std::map<String, String> actionsResponseBuffer;
+
     // Métodos privados
     void processMessage(int clientIndex, String message);
     void forwardMessage(int senderIndex, String message);
     void forwardToSubscribers(String topic, String payload);
-    
+
     // Handlers de mensajes específicos
     void handleModuleRegistration(int clientIndex, JsonDocument& doc);
     void handleHeartbeat(int clientIndex, JsonDocument& doc);

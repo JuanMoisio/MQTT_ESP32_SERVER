@@ -80,9 +80,8 @@ String DeviceManager::addDevice(const String& macAddress, const String& deviceTy
                     authorizedDevices[macAddress].clientIndex = targetIndex;
                     
                     // Also send explicit module_credentials payload as a fallback
-        // Inicializar EEPROM y cargar dispositivos autorizados
-        eepromManager->begin();
-                    JsonDocument creds;
+                    eepromManager->begin();
+                    DynamicJsonDocument creds(256);
                     creds["type"] = "module_credentials";
                     creds["module_id"] = scannedDevice.moduleId;
                     creds["mac_address"] = macAddress;
@@ -95,7 +94,7 @@ String DeviceManager::addDevice(const String& macAddress, const String& deviceTy
                     Serial.println("📤 module_credentials enviado al cliente index: " + String(targetIndex));
                 } else {
                     // Fallback: broadcast registration_success
-                    JsonDocument notification;
+                    DynamicJsonDocument notification(256);
                     notification["type"] = "registration_success";
                     notification["mac_address"] = macAddress;
                     notification["message"] = "Dispositivo registrado exitosamente";
@@ -107,7 +106,7 @@ String DeviceManager::addDevice(const String& macAddress, const String& deviceTy
                     mqttBrokerManager->sendToAllClients(notificationStr);
                     Serial.println("📤 Notificación de registro enviada a todos los clientes (broadcast)");
                 }
-            }
+             }
             
             // Actualizar estado del dispositivo recién registrado
             authorizedDevices[macAddress].isConnected = true;
@@ -264,11 +263,34 @@ void DeviceManager::loadAuthorizedDevices() {
     Serial.println("💾 Cargando dispositivos autorizados desde EEPROM...");
     authorizedDevices.clear();
     auto eepromDevices = eepromManager->loadDevices();
+
+    // Nuevo logging detallado sobre lo que devuelve EEPROM
+    Serial.print("[DeviceManager] eepromManager->loadDevices() returned count: ");
+    Serial.println(eepromDevices.size());
+    int idx = 0;
+    for (const auto& pair : eepromDevices) {
+        Serial.print("  [EEPROM] entry "); Serial.print(idx++);
+        Serial.print(" key='"); Serial.print(pair.first); Serial.print("' ");
+        Serial.print("| mac='"); Serial.print(pair.second.macAddress); Serial.print("'");
+        Serial.print(" | type='"); Serial.print(pair.second.deviceType); Serial.print("'");
+        Serial.print(" | apiKey='"); Serial.print(pair.second.apiKey ? pair.second.apiKey : String("")); Serial.print("'");
+        Serial.print(" | desc='"); Serial.print(pair.second.description); Serial.println("'");
+    }
+
     int loaded = 0;
     for (const auto& pair : eepromDevices) {
         // Saltar entradas con clave vacía o MAC inválida
-        if (pair.first.length() < 5) continue;
-        if (!eepromManager->isMacValid(pair.second.macAddress)) continue;
+        if (pair.first.length() < 5) {
+            Serial.print("[DeviceManager] Skipping entry with short/empty key: '");
+            Serial.print(pair.first);
+            Serial.println("'");
+            continue;
+        }
+        if (!eepromManager->isMacValid(pair.second.macAddress)) {
+            Serial.print("[DeviceManager] Skipping entry with invalid MAC: ");
+            Serial.println(pair.second.macAddress);
+            continue;
+        }
 
         AuthorizedDevice dev;
         dev.macAddress = pair.second.macAddress;
@@ -281,6 +303,7 @@ void DeviceManager::loadAuthorizedDevices() {
         dev.lastSeen = 0;
         dev.currentIP = "";
         authorizedDevices[pair.first] = dev;
+
         Serial.print("[DeviceManager] Dispositivo cargado: ");
         Serial.print(dev.macAddress);
         Serial.print(" tipo: ");
@@ -291,6 +314,12 @@ void DeviceManager::loadAuthorizedDevices() {
         Serial.println(dev.description);
         loaded++;
     }
+
+    Serial.print("[DeviceManager] loadAuthorizedDevices -> loaded: ");
+    Serial.print(loaded);
+    Serial.print(" entries, authorizedDevices.size(): ");
+    Serial.println(authorizedDevices.size());
+
     if (loaded == 0) {
         Serial.println("📱 Sistema de dispositivos autorizados inicializado (vacío)");
     } else {
@@ -318,9 +347,9 @@ void DeviceManager::saveAuthorizedDevices() {
 
 // Handlers de mensajes
 void DeviceManager::handleMACResponse(int clientIndex, JsonDocument& doc) {
-    String moduleId = doc["module_id"];
-    String macAddress = doc["mac_address"];
-    String deviceType = doc["device_type"];
+    String moduleId   = doc["module_id"]   | "";
+    String macAddress = doc["mac_address"] | "";
+    String deviceType = doc["device_type"] | "";
     
     Serial.println("📡 Respuesta MAC recibida: " + macAddress + " (Tipo: " + deviceType + ") - ModuleID: " + moduleId);
     
@@ -332,21 +361,21 @@ void DeviceManager::handleMACResponse(int clientIndex, JsonDocument& doc) {
         webDeviceType = "fingerprint";
     }
     
-    // SIEMPRE agregar a la lista de scan (preservando clientIndex si viene)
+    // SIEMPRE agregar/actualizar en la lista de escaneo (preserva clientIndex si viene)
     addToScannedDevices(macAddress, webDeviceType, moduleId, clientIndex);
     
-    // Verificar si el dispositivo YA está registrado
+    // Verificar si el dispositivo YA está registrado (autorizado)
     bool isAlreadyRegistered = (authorizedDevices.find(macAddress) != authorizedDevices.end());
     
     if (isAlreadyRegistered) {
-        // Dispositivo ya registrado - marcarlo como conectado
+        // Dispositivo ya autorizado - conectar y actualizar estado
         Serial.println("✅ MAC " + macAddress + " (" + deviceType + ") YA está registrada - conectando automáticamente");
         
-        // Actualizar estado del dispositivo registrado
         AuthorizedDevice& device = authorizedDevices[macAddress];
         device.isConnected = true;
-        device.lastSeen = millis();
+        device.lastSeen    = millis();
         device.clientIndex = clientIndex;
+
         // Intentar obtener IP remota desde MQTTBrokerManager
         if (mqttBrokerManager) {
             String ip = mqttBrokerManager->getClientIP(clientIndex);
@@ -358,14 +387,46 @@ void DeviceManager::handleMACResponse(int clientIndex, JsonDocument& doc) {
         if (mqttBrokerManager) {
             mqttBrokerManager->sendAuthSuccessMessage(clientIndex, macAddress, device.apiKey);
         }
+
+        // 🔘 AUTO-REGISTRO DEL MÓDULO en registeredModules (clave para /api/modules)
+        if (moduleId.length() > 0) {
+            auto it = registeredModules.find(moduleId);
+            if (it == registeredModules.end()) {
+                // Crear nueva entrada del módulo
+                ModuleInfo mi;
+                mi.moduleId         = moduleId;
+                mi.moduleType       = webDeviceType; // 'fingerprint' / 'rfid' / ...
+                mi.capabilities     = "";            // se puede actualizar luego con actions_response
+                mi.lastHeartbeat    = millis();
+                mi.isActive         = true;
+                mi.isAuthenticated  = true;
+                mi.macAddress       = macAddress;
+                
+                registeredModules[moduleId] = mi;
+                Serial.println("✅ AUTO-REGISTER: módulo agregado por MAC response -> " + moduleId);
+            } else {
+                // Refrescar estado del módulo existente
+                ModuleInfo& mi = it->second;
+                mi.moduleType      = webDeviceType; // por si cambió el mapeo
+                mi.lastHeartbeat   = millis();
+                mi.isActive        = true;
+                mi.isAuthenticated = true;
+                mi.macAddress      = macAddress;    // asegura vínculo MAC<->módulo
+                Serial.println("🔄 AUTO-REGISTER: módulo ya existía; estado refrescado -> " + moduleId);
+            }
+        } else {
+            Serial.println("⚠️ AUTO-REGISTER omitido: module_id vacío en MAC response");
+        }
+
     } else {
         // Dispositivo nuevo - disponible para registro manual
         Serial.println("✅ MAC " + macAddress + " (" + deviceType + ") NO está registrada - disponible para registro");
-        lastRequestedMAC = macAddress;
+        lastRequestedMAC        = macAddress;
         lastRequestedDeviceType = webDeviceType;
-        macRequestTime = millis();
+        macRequestTime          = millis();
     }
 }
+
 
 void DeviceManager::handleDeviceInfoResponse(int clientIndex, JsonDocument& doc) {
     String moduleId = doc["module_id"];
@@ -444,52 +505,89 @@ void DeviceManager::addToScannedDevices(const String& macAddress, const String& 
     }
 }
 
+// Nuevo: wrapper público que delega en el método privado addToScannedDevices
+void DeviceManager::reportScannedDevice(const String& macAddress, const String& deviceType, const String& moduleId, int clientIndex) {
+    // Reutiliza la lógica ya implementada
+    addToScannedDevices(macAddress, deviceType, moduleId, clientIndex);
+}
+
 // Métodos JSON
 String DeviceManager::getDevicesJSON() {
-    JsonDocument response;
-    JsonArray devices = response["devices"].to<JsonArray>();
-    
+    // DEBUG: mostrar el estado interno antes de construir el JSON
+    Serial.print("[DeviceManager] getDevicesJSON - authorizedDevices size: ");
+    Serial.println(authorizedDevices.size());
+    for (const auto &pair : authorizedDevices) {
+        Serial.print("  - key: ");
+        Serial.print(pair.first);
+        Serial.print(" | mac: ");
+        Serial.print(pair.second.macAddress);
+        Serial.print(" | type: ");
+        Serial.print(pair.second.deviceType);
+        Serial.print(" | isActive: ");
+        Serial.print(pair.second.isActive ? "YES" : "NO");
+        Serial.print(" | isConnected: ");
+        Serial.print(pair.second.isConnected ? "YES" : "NO");
+        Serial.print(" | clientIndex: ");
+        Serial.println(pair.second.clientIndex);
+    }
+    // También loguear scannedDevices para ver si hay entradas que coincidan
+    Serial.print("[DeviceManager] scannedDevices size: ");
+    Serial.println(scannedDevices.size());
+    for (const auto &sd : scannedDevices) {
+        Serial.print("  - scanned mac: ");
+        Serial.print(sd.macAddress);
+        Serial.print(" | moduleId: ");
+        Serial.println(sd.moduleId);
+    }
+
+    // Construir JSON con capacidad suficiente
+    DynamicJsonDocument response(2048);
+    JsonArray devices = response.createNestedArray("devices");
+
     for (auto& pair : authorizedDevices) {
-        JsonObject device = devices.add<JsonObject>();
+        JsonObject device = devices.createNestedObject();
         device["macAddress"] = pair.second.macAddress;
         device["deviceType"] = pair.second.deviceType;
         device["apiKey"] = pair.second.apiKey;
         device["description"] = pair.second.description;
         device["isActive"] = pair.second.isActive;
+        device["isConnected"] = pair.second.isConnected;
+        device["clientIndex"] = pair.second.clientIndex;
         device["lastSeen"] = pair.second.lastSeen;
         device["currentIP"] = pair.second.currentIP;
     }
-    
+
     response["success"] = true;
     response["total_devices"] = authorizedDevices.size();
-    
+
     String responseStr;
     serializeJson(response, responseStr);
+
+    // DEBUG: mostrar JSON generado en consola
+    Serial.print("[DeviceManager] getDevicesJSON response: ");
+    Serial.println(responseStr);
+
     return responseStr;
 }
 
 String DeviceManager::getModulesJSON() {
-    JsonDocument response;
-    JsonArray modulesArray = response["modules"].to<JsonArray>();
+    // Estimar memoria: base + por módulo
+    const size_t BASE = 1024;
+    const size_t PER_MODULE = 256; // ajustá si tenés campos extra
+    size_t cap = BASE + registeredModules.size() * PER_MODULE;
+
+    DynamicJsonDocument response(cap);
+    JsonArray modulesArray = response.createNestedArray("modules");
 
     Serial.print("[DeviceManager] registeredModules size: ");
     Serial.println(registeredModules.size());
-    if (registeredModules.size() == 0) {
-        Serial.println("[DeviceManager] No hay módulos registrados.");
-    } else {
-        Serial.println("[DeviceManager] Módulos registrados:");
-        for (auto& pair : registeredModules) {
-            Serial.print("  - moduleId: ");
-            Serial.println(pair.second.moduleId);
-        }
-    }
 
     for (auto& pair : registeredModules) {
         ModuleInfo& module = pair.second;
-        JsonObject moduleObj = modulesArray.add<JsonObject>();
+        JsonObject moduleObj = modulesArray.createNestedObject();
         moduleObj["moduleId"] = module.moduleId;
         moduleObj["moduleType"] = module.moduleType;
-        moduleObj["capabilities"] = module.capabilities;
+        moduleObj["capabilities"] = module.capabilities;  // si es CSV ok; si es lista, llenarla como array
         moduleObj["macAddress"] = module.macAddress;
         moduleObj["isActive"] = module.isActive;
         moduleObj["isAuthenticated"] = module.isAuthenticated;
@@ -503,25 +601,26 @@ String DeviceManager::getModulesJSON() {
     return responseStr;
 }
 
+
 String DeviceManager::getStatsJSON() {
-    JsonDocument response;
+    DynamicJsonDocument response(512);
     
     response["registered_devices"] = authorizedDevices.size();
     
-    // Calcular dispositivos conectados
-    int connectedDevices = 0;
-    unsigned long now = millis();
-    
-    Serial.println("📊 DEBUG: Revisando dispositivos conectados:");
-    for (auto& pair : authorizedDevices) {
-        AuthorizedDevice& device = pair.second;
-        unsigned long timeSince = (now - device.lastSeen);
-        
-        Serial.println("  - MAC: " + device.macAddress + 
-                      " | isConnected: " + String(device.isConnected ? "YES" : "NO") +
-                      " | isActive: " + String(device.isActive ? "YES" : "NO") +
-                      " | lastSeen: " + String(timeSince) + "ms ago" +
-                      " | clientIndex: " + String(device.clientIndex));
+     // Calcular dispositivos conectados
+     int connectedDevices = 0;
+     unsigned long now = millis();
+     
+     Serial.println("📊 DEBUG: Revisando dispositivos conectados:");
+     for (auto& pair : authorizedDevices) {
+         AuthorizedDevice& device = pair.second;
+         unsigned long timeSince = (now - device.lastSeen);
+         
+         Serial.println("  - MAC: " + device.macAddress + 
+                       " | isConnected: " + String(device.isConnected ? "YES" : "NO") +
+                       " | isActive: " + String(device.isActive ? "YES" : "NO") +
+                       " | lastSeen: " + String(timeSince) + "ms ago" +
+                       " | clientIndex: " + String(device.clientIndex));
         
         // Usar isConnected flag y verificar que lastSeen no sea muy antiguo
         if (device.isConnected && device.isActive && timeSince < 300000) { // 5 minutos
@@ -544,8 +643,8 @@ String DeviceManager::getStatsJSON() {
 }
 
 String DeviceManager::getScanResultsJSON() {
-    JsonDocument response;
-    JsonArray devices = response["devices"].to<JsonArray>();
+    DynamicJsonDocument response(2048);
+    JsonArray devices = response.createNestedArray("devices");
 
     // Debug: mostrar cuántos dispositivos hay en scannedDevices
     Serial.println("📁 getScanResultsJSON - scannedDevices size: " + String(scannedDevices.size()));
@@ -559,7 +658,7 @@ String DeviceManager::getScanResultsJSON() {
     }
     
     for (auto& device : scannedDevices) {
-        JsonObject deviceObj = devices.add<JsonObject>();
+        JsonObject deviceObj = devices.createNestedObject();
         deviceObj["macAddress"] = device.macAddress;
         deviceObj["deviceType"] = device.deviceType;
         deviceObj["moduleId"] = device.moduleId;
@@ -577,21 +676,8 @@ String DeviceManager::getScanResultsJSON() {
     return responseStr;
 }
 
-int DeviceManager::getScannedCount() {
-    return scannedDevices.size();
-}
-
-String DeviceManager::getModuleIdByMac(const String& macAddress) {
-    for (const auto& device : scannedDevices) {
-        if (device.macAddress == macAddress) {
-            return device.moduleId;
-        }
-    }
-    return "";
-}
-
 String DeviceManager::getLastMacJSON() {
-    JsonDocument response;
+    DynamicJsonDocument response(256);
     
     // Verificar si la información es reciente (últimos 30 segundos)
     if (lastRequestedMAC != "" && (millis() - macRequestTime) < 30000) {
@@ -614,15 +700,15 @@ String DeviceManager::getLastMacJSON() {
 }
 
 String DeviceManager::getUnregisteredDevicesJSON() {
-    JsonDocument response;
-    JsonArray devices = response["devices"].to<JsonArray>();
+    DynamicJsonDocument response(2048);
+    JsonArray devices = response.createNestedArray("devices");
     
     // Obtener dispositivos de scan que no están registrados
     for (auto& device : scannedDevices) {
         bool isRegistered = (authorizedDevices.find(device.macAddress) != authorizedDevices.end());
         
         if (!isRegistered) {
-            JsonObject deviceObj = devices.add<JsonObject>();
+            JsonObject deviceObj = devices.createNestedObject();
             deviceObj["macAddress"] = device.macAddress;
             deviceObj["deviceType"] = device.deviceType;
             deviceObj["moduleId"] = device.moduleId;
@@ -652,10 +738,10 @@ void DeviceManager::handleModuleRegistration(int clientIndex, JsonDocument& doc,
     Serial.println("   ModuleID: " + moduleId);
     Serial.println("   ApiKey: " + (apiKey.length() > 0 ? apiKey.substring(0, 8) + "..." : "VACÍO"));
     
-    JsonDocument response;
-    response["type"] = "registration_response";
-    response["response_type"] = "module";
-    response["module_id"] = moduleId;
+    DynamicJsonDocument response(512);
+     response["type"] = "registration_response";
+     response["response_type"] = "module";
+     response["module_id"] = moduleId;
     
     // Verificar autenticación
     bool isAuthenticated = authenticateDevice(macAddress, apiKey);
@@ -849,4 +935,135 @@ ModuleInfo* DeviceManager::getModuleById(const String& moduleId) {
         return &(it->second);
     }
     return nullptr;
+}
+
+// Elimina un módulo por su moduleId y actualiza el estado del dispositivo autorizado relacionado
+bool DeviceManager::deregisterModule(const String& moduleId) {
+    // Intentar eliminar como moduleId en registeredModules
+    auto it = registeredModules.find(moduleId);
+    if (it != registeredModules.end()) {
+        String mac = it->second.macAddress;
+        registeredModules.erase(it);
+        Serial.println("🗑️ Módulo eliminado: " + moduleId);
+
+        // Si el módulo estaba asociado a un dispositivo autorizado, eliminar ese dispositivo
+        if (mac.length() > 0 && authorizedDevices.find(mac) != authorizedDevices.end()) {
+            authorizedDevices.erase(mac);
+            saveAuthorizedDevices(); // Persistir cambio en EEPROM
+            Serial.println("🗑️ AuthorizedDevice eliminado (persistente): " + mac);
+        }
+        return true;
+    }
+
+    // Si no existe como módulo, intentar eliminar como MAC (fallback)
+    if (authorizedDevices.find(moduleId) != authorizedDevices.end()) {
+        bool ok = removeDevice(moduleId); // ya persiste en EEPROM
+        Serial.println(ok ? "🗑️ MAC tratada como dispositivo y eliminada: " + moduleId
+                          : "❌ Error eliminando dispositivo por MAC: " + moduleId);
+        return ok;
+    }
+
+    Serial.println("❌ No se encontró módulo o dispositivo para eliminar: " + moduleId);
+    return false;
+}
+
+String DeviceManager::getDebugJSON() {
+    // Construir JSON grande con estado interno para debugging
+    DynamicJsonDocument response(16384);
+
+    // Authorized devices
+    JsonArray authArr = response.createNestedArray("authorizedDevices");
+    for (const auto& pair : authorizedDevices) {
+        JsonObject o = authArr.createNestedObject();
+        o["key"] = pair.first;
+        o["macAddress"] = pair.second.macAddress;
+        o["deviceType"] = pair.second.deviceType;
+        o["apiKey"] = pair.second.apiKey;
+        o["description"] = pair.second.description;
+        o["isActive"] = pair.second.isActive;
+        o["isConnected"] = pair.second.isConnected;
+        o["clientIndex"] = pair.second.clientIndex;
+        o["lastSeen"] = pair.second.lastSeen;
+        o["currentIP"] = pair.second.currentIP;
+    }
+
+    // Registered modules
+    JsonArray modArr = response.createNestedArray("registeredModules");
+    for (const auto& pair : registeredModules) {
+        JsonObject o = modArr.createNestedObject();
+        o["moduleId"] = pair.second.moduleId;
+        o["moduleType"] = pair.second.moduleType;
+        o["capabilities"] = pair.second.capabilities;
+        o["macAddress"] = pair.second.macAddress;
+        o["isActive"] = pair.second.isActive;
+        o["isAuthenticated"] = pair.second.isAuthenticated;
+        o["lastHeartbeat"] = pair.second.lastHeartbeat;
+    }
+
+    // Scanned devices
+    JsonArray scanArr = response.createNestedArray("scannedDevices");
+    for (const auto& d : scannedDevices) {
+        JsonObject o = scanArr.createNestedObject();
+        o["macAddress"] = d.macAddress;
+        o["deviceType"] = d.deviceType;
+        o["moduleId"] = d.moduleId;
+        o["timestamp"] = d.timestamp;
+        o["clientIndex"] = d.clientIndex;
+    }
+
+    // EEPROM raw (si está el manager)
+    if (eepromManager) {
+        auto eepromDevices = eepromManager->loadDevices();
+        JsonArray eepArr = response.createNestedArray("eepromDevices");
+        for (const auto &p : eepromDevices) {
+            JsonObject o = eepArr.createNestedObject();
+            o["key"] = p.first;
+            o["macAddress"] = p.second.macAddress;
+            o["deviceType"] = p.second.deviceType;
+            o["apiKey"] = p.second.apiKey;
+            o["description"] = p.second.description;
+        }
+        response["eeprom_count"] = (int)eepromDevices.size();
+    } else {
+        response["eeprom_count"] = 0;
+    }
+
+    response["authorized_count"] = (int)authorizedDevices.size();
+    response["registered_modules_count"] = (int)registeredModules.size();
+    response["scanned_count"] = (int)scannedDevices.size();
+    response["success"] = true;
+
+    String out;
+    serializeJson(response, out);
+    Serial.print("[DeviceManager] getDebugJSON response: ");
+    Serial.println(out);
+    return out;
+}
+
+int DeviceManager::getScannedCount() {
+    return scannedDevices.size();
+}
+
+// Nuevo: contar módulos registrados (usado por la UI)
+int DeviceManager::getRegisteredModulesCount() {
+    return registeredModules.size();
+}
+
+// Nuevo: contar dispositivos autorizados (usado por la UI)
+int DeviceManager::getAuthorizedDevicesCount() {
+    return authorizedDevices.size();
+}
+
+// Nuevo: marcar dispositivo autorizado como conectado y actualizar IP/lastSeen
+void DeviceManager::markDeviceConnected(const String& macAddress, int clientIndex, const String& ip) {
+    auto it = authorizedDevices.find(macAddress);
+    if (it != authorizedDevices.end()) {
+        it->second.isConnected = true;
+        it->second.clientIndex = clientIndex;
+        it->second.currentIP = ip;
+        it->second.lastSeen = millis();
+        Serial.println("[DeviceManager] markDeviceConnected -> MAC: " + macAddress + " clientIndex: " + String(clientIndex) + " IP: " + ip);
+    } else {
+        Serial.println("[DeviceManager] markDeviceConnected: MAC no encontrada en authorizedDevices: " + macAddress);
+    }
 }

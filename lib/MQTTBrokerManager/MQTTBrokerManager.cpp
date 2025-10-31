@@ -2,11 +2,11 @@
 #include "WiFiManager.h"
 #include "DeviceManager.h"
 
+// Constructor: inicializar mqttServer y arrays
 MQTTBrokerManager::MQTTBrokerManager(WiFiManager* wifiMgr, DeviceManager* deviceMgr)
     : mqttServer(MQTT_PORT), wifiManager(wifiMgr), deviceManager(deviceMgr) {
-    
-    // Inicializar array de conexiones
-    for (int i = 0; i < MAX_CLIENTS; i++) {
+    // Inicializar arrays
+    for (int i = 0; i < MAX_CLIENTS; ++i) {
         clientConnected[i] = false;
         lastHeartbeatSent[i] = 0;
     }
@@ -47,91 +47,41 @@ void MQTTBrokerManager::handleNewConnections() {
     }
 }
 
+// sendWelcomeMessage: usar DynamicJsonDocument y enviar string
 void MQTTBrokerManager::sendWelcomeMessage(int clientIndex) {
-    JsonDocument welcome;
-    welcome["type"] = "system";
-    welcome["action"] = "welcome";
-    welcome["broker_id"] = "esp32c3_broker_001";
-    welcome["timestamp"] = millis();
-    welcome["message"] = "Conectado al broker. Envía 'register' para registrar módulo.";
-    
-    String welcomeStr;
-    serializeJson(welcome, welcomeStr);
-    
-    mqttClients[clientIndex].println(welcomeStr);
+    DynamicJsonDocument welcome(256);
+    welcome["type"] = "welcome";
+    welcome["message"] = "Welcome to embedded broker";
+    String out;
+    serializeJson(welcome, out);
+    sendToClient(clientIndex, out);
 }
 
+// sendAuthSuccessMessage: usar DynamicJsonDocument local y enviar
 void MQTTBrokerManager::sendAuthSuccessMessage(int clientIndex, const String& macAddress, const String& apiKey) {
-    // Find module_id for this mac address from scanned devices
-    String moduleId = "";
-    if (deviceManager) {
-        moduleId = deviceManager->getModuleIdByMac(macAddress);
-    }
-    
-    JsonDocument authSuccess;
+    DynamicJsonDocument authSuccess(256);
     authSuccess["type"] = "auth_success";
     authSuccess["mac_address"] = macAddress;
     authSuccess["api_key"] = apiKey;
-    authSuccess["message"] = "Dispositivo autenticado y conectado";
-    authSuccess["timestamp"] = millis();
-    if (moduleId.length() > 0) {
-        authSuccess["module_id"] = moduleId;
-    }
-    
     String authStr;
     serializeJson(authSuccess, authStr);
-    
-    Serial.println("📤 Enviando auth_success al cliente " + String(clientIndex) + ": " + authStr);
-    mqttClients[clientIndex].println(authStr);
-    
-    // Also send registration_response as expected by example clients
-    JsonDocument regResponse;
-    regResponse["type"] = "registration_response";
-    regResponse["response_type"] = "module";
-    regResponse["mac_address"] = macAddress;
-    regResponse["api_key"] = apiKey;
-    regResponse["status"] = "success";
-    regResponse["message"] = "Dispositivo registrado y autenticado exitosamente";
-    regResponse["timestamp"] = millis();
-    if (moduleId.length() > 0) {
-        regResponse["module_id"] = moduleId;
+
+    // Enviar al cliente si está conectado
+    if (clientIndex >= 0 && clientIndex < MAX_CLIENTS && clientConnected[clientIndex]) {
+        mqttClients[clientIndex].println(authStr);
     }
-    
+
+    // Construir y enviar registration response también con DynamicJsonDocument
+    DynamicJsonDocument regResponse(256);
+    regResponse["type"] = "registration_response";
+    regResponse["status"] = "success";
+    regResponse["mac_address"] = macAddress;
     String regStr;
     serializeJson(regResponse, regStr);
-    
-    Serial.println("📤 Enviando registration_response al cliente " + String(clientIndex) + ": " + regStr);
-    mqttClients[clientIndex].println(regStr);
-    
-    // Also send module_registered event as some clients expect this
-    JsonDocument moduleReg;
-    moduleReg["type"] = "module_registered";
-    moduleReg["module_id"] = moduleId;
-    moduleReg["mac_address"] = macAddress;
-    moduleReg["api_key"] = apiKey;
-    moduleReg["status"] = "connected";
-    moduleReg["message"] = "Módulo conectado y listo";
-    moduleReg["timestamp"] = millis();
-    
-    String moduleRegStr;
-    serializeJson(moduleReg, moduleRegStr);
-    
-    Serial.println("📤 Enviando module_registered al cliente " + String(clientIndex) + ": " + moduleRegStr);
-    mqttClients[clientIndex].println(moduleRegStr);
-    
-    // Send a command to force display update
-    JsonDocument displayCmd;
-    displayCmd["type"] = "command";
-    displayCmd["module_id"] = moduleId;
-    displayCmd["command"] = "display_connected";
-    displayCmd["message"] = "Dispositivo conectado - actualizar display";
-    displayCmd["timestamp"] = millis();
-    
-    String displayCmdStr;
-    serializeJson(displayCmd, displayCmdStr);
-    
-    Serial.println("📤 Enviando display_connected command al cliente " + String(clientIndex) + ": " + displayCmdStr);
-    mqttClients[clientIndex].println(displayCmdStr);
+
+    if (clientIndex >= 0 && clientIndex < MAX_CLIENTS && clientConnected[clientIndex]) {
+        mqttClients[clientIndex].println(regStr);
+    }
 }
 
 String MQTTBrokerManager::getClientIP(int clientIndex) {
@@ -148,10 +98,10 @@ void MQTTBrokerManager::sendToAllClients(const String& message) {
     }
 }
 
-void MQTTBrokerManager::sendToClient(int clientIndex, const String& message) {
+void MQTTBrokerManager::sendToClient(int clientIndex, const String& payload) {
     if (clientIndex < 0 || clientIndex >= MAX_CLIENTS) return;
     if (!clientConnected[clientIndex]) return;
-    mqttClients[clientIndex].println(message);
+    mqttClients[clientIndex].println(payload);
 }
 
 void MQTTBrokerManager::processClientMessages() {
@@ -176,94 +126,78 @@ void MQTTBrokerManager::processClientMessages() {
     }
 }
 
-void MQTTBrokerManager::processMessage(int clientIndex, String message) {
-    Serial.print("Cliente ");
+void MQTTBrokerManager::processMessage(int clientIndex, String payload) {
+    Serial.print("[MQTTBrokerManager] Cliente ");
     Serial.print(clientIndex);
     Serial.print(" envió: ");
-    Serial.println(message);
-    Serial.println("📥 Mensaje RAW recibido de cliente " + String(clientIndex) + ": " + message);
-    
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, message);
-    
-    if (error) {
-        Serial.print("Error parseando JSON: ");
-        Serial.println(error.c_str());
+    Serial.println(payload);
+
+    DynamicJsonDocument doc(1024);
+    DeserializationError err = deserializeJson(doc, payload);
+    if (err) {
+        Serial.print("[MQTTBrokerManager] JSON parse error: ");
+        Serial.println(err.c_str());
         return;
     }
-    
-    String type = doc["type"];
-    
-    Serial.println("🔍 Tipo de mensaje identificado: '" + type + "'");
-    
-    // Log ALL messages to see what the client is really sending
-    if (type == "register") {
-        Serial.println("📝 Procesando mensaje REGISTER...");
-        Serial.println("📝 REGISTER DETAILS:");
-        Serial.println("   module_id: " + doc["module_id"].as<String>());
-        Serial.println("   mac_address: " + doc["mac_address"].as<String>());
-        Serial.println("   device_type: " + doc["device_type"].as<String>());
-        Serial.println("   api_key: " + (doc["api_key"].as<String>().length() > 0 ? doc["api_key"].as<String>().substring(0, 8) + "..." : "EMPTY"));
-        handleModuleRegistration(clientIndex, doc);
-    } else if (type == "heartbeat") {
-        handleHeartbeat(clientIndex, doc);
-    } else if (type == "pong") {
-        Serial.println("🏓 Pong recibido de cliente " + String(clientIndex));
-        // Resetear el timer de heartbeat para este cliente
-        lastHeartbeatSent[clientIndex] = millis();
-    } else if (type == "publish") {
-        handlePublish(clientIndex, doc);
-    } else if (type == "subscribe") {
-        handleSubscribe(clientIndex, doc);
-    } else if (type == "config") {
-        handleConfiguration(clientIndex, doc);
-    } else if (type == "mac_response" || type == "mac_response_unregistered") {
-        Serial.println("📡 Procesando mensaje MAC_RESPONSE...");
-        deviceManager->handleMACResponse(clientIndex, doc);
-    } else if (type == "device_info_response") {
-        deviceManager->handleDeviceInfoResponse(clientIndex, doc);
-    } else if (type == "device_scan_response") {
-        deviceManager->handleDeviceScanResponse(clientIndex, doc);
-    } else if (type == "device_registration") {
-        deviceManager->handleDeviceRegistration(clientIndex, doc);
-    } else if (type == "module_registration") {
-        handleModuleRegistration(clientIndex, doc);
-    } else if (type == "get_actions") {
-        // Solicitud de acciones disponibles de un módulo
-        String targetModuleId = doc["module_id"];
-        Serial.println("🔍 Solicitud de acciones para módulo: " + targetModuleId);
-        // Buscar cliente conectado para ese módulo
-        for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (clientConnected[i]) {
-                // Aquí podrías tener una mejor asociación módulo <-> cliente
-                // Por ahora, reenviamos a todos los clientes conectados
-                JsonDocument getActionsMsg;
-                getActionsMsg["type"] = "get_actions";
-                getActionsMsg["module_id"] = targetModuleId;
-                getActionsMsg["requester_index"] = clientIndex;
-                getActionsMsg["timestamp"] = millis();
-                String getActionsStr;
-                serializeJson(getActionsMsg, getActionsStr);
-                mqttClients[i].println(getActionsStr);
-            }
+
+    // Extraer tipo de mensaje de forma segura
+    String msgType = "";
+    if (doc.containsKey("type") && doc["type"].is<const char*>()) {
+        msgType = String((const char*)doc["type"]);
+    } else if (doc.containsKey("type")) {
+        String tmp; serializeJson(doc["type"], tmp); msgType = tmp;
+    }
+    Serial.print("[MQTTBrokerManager] 🔍 Tipo de mensaje identificado: '");
+    Serial.print(msgType);
+    Serial.println("'");
+
+    // Dispatch a DeviceManager con logging
+    if (msgType == "module_registration") {
+        Serial.println("[MQTTBrokerManager] Dispatching module_registration -> DeviceManager::handleModuleRegistration");
+        if (deviceManager) deviceManager->handleModuleRegistration(clientIndex, (JsonDocument&)doc, &mqttClients[clientIndex]);
+    } else if (msgType == "mac_response" || msgType == "mac") {
+        Serial.println("[MQTTBrokerManager] Dispatching mac_response -> DeviceManager::handleMACResponse");
+        if (deviceManager) deviceManager->handleMACResponse(clientIndex, (JsonDocument&)doc);
+    } else if (msgType == "device_info" || msgType == "info_response") {
+        Serial.println("[MQTTBrokerManager] Dispatching device_info -> DeviceManager::handleDeviceInfoResponse");
+        if (deviceManager) deviceManager->handleDeviceInfoResponse(clientIndex, (JsonDocument&)doc);
+    } else if (msgType == "scan_response" || msgType == "device_scan") {
+        Serial.println("[MQTTBrokerManager] Dispatching scan_response -> DeviceManager::handleDeviceScanResponse");
+        if (deviceManager) deviceManager->handleDeviceScanResponse(clientIndex, (JsonDocument&)doc);
+    } else if (msgType == "heartbeat") {
+        Serial.println("[MQTTBrokerManager] Heartbeat recibido -> procesando");
+        // Si viene module_id, actualizar heartbeat en DeviceManager
+        if (doc.containsKey("module_id") && doc["module_id"].is<const char*>()) {
+            String mid = String((const char*)doc["module_id"]);
+            Serial.print("[MQTTBrokerManager] Heartbeat de module_id: ");
+            Serial.println(mid);
+            if (deviceManager) deviceManager->updateModuleHeartbeat(mid);
         }
-    } else if (type == "actions_response") {
-        // Guardar respuesta en el buffer por module_id
-        String moduleId = doc["module_id"];
-        actionsResponseBuffer[moduleId] = doc;
-        int requesterIndex = doc["requester_index"] | -1;
-        if (requesterIndex >= 0 && requesterIndex < MAX_CLIENTS && clientConnected[requesterIndex]) {
-            Serial.println("📤 Reenviando actions_response al cliente solicitante: " + String(requesterIndex));
-            String actionsStr;
-            serializeJson(doc, actionsStr);
-            mqttClients[requesterIndex].println(actionsStr);
-        } else {
-            Serial.println("⚠️ requester_index inválido o cliente no conectado");
+        // Si viene mac_address, marcar dispositivo autorizado como conectado
+        if (doc.containsKey("mac_address") && doc["mac_address"].is<const char*>()) {
+            String mac = String((const char*)doc["mac_address"]);
+            String ip = mqttClients[clientIndex].remoteIP().toString();
+            Serial.print("[MQTTBrokerManager] Heartbeat incluye MAC: ");
+            Serial.print(mac);
+            Serial.print(" -> marcando como conectado clientIndex=");
+            Serial.println(clientIndex);
+            if (deviceManager) deviceManager->markDeviceConnected(mac, clientIndex, ip);
+            // Usar wrapper público en lugar de llamar al método privado
+            String moduleId = doc.containsKey("module_id") && doc["module_id"].is<const char*>() ? String((const char*)doc["module_id"]) : String("");
+            if (deviceManager) deviceManager->reportScannedDevice(mac, "", moduleId, clientIndex);
         }
     } else {
-        Serial.println("❓ Tipo de mensaje no reconocido: '" + type + "' - reenviando a suscriptores");
-        // Reenviar mensaje a suscriptores
-        forwardMessage(clientIndex, message);
+        Serial.println("[MQTTBrokerManager] Tipo no manejado localmente -> forwarding/raw handling");
+        // Manejo genérico: si tu lógica requiere, puedes reenviar a todos o a un handler genérico
+    }
+
+    // Ejemplo: guardar actions responses si vienen
+    if (doc.containsKey("module_id") && doc.containsKey("actions")) {
+        String mid = String((const char*)doc["module_id"]);
+        String serializedActions;
+        serializeJson(doc["actions"], serializedActions);
+        actionsResponseBuffer[mid] = serializedActions;
+        Serial.println("[MQTTBrokerManager] Stored actionsResponseBuffer for " + mid);
     }
 }
 
@@ -277,9 +211,8 @@ void MQTTBrokerManager::handleHeartbeat(int clientIndex, JsonDocument& doc) {
     
     if (deviceManager->updateModuleHeartbeat(moduleId)) {
         // Responder heartbeat
-        JsonDocument response;
+        DynamicJsonDocument response(256);
         response["type"] = "heartbeat_ack";
-        response["module_id"] = moduleId;
         response["timestamp"] = millis();
         
         String responseStr;
@@ -316,12 +249,9 @@ void MQTTBrokerManager::handleConfiguration(int clientIndex, JsonDocument& doc) 
         bool discoveryMode = doc["value"];
         deviceManager->setDiscoveryMode(discoveryMode);
         
-        JsonDocument response;
-        response["type"] = "config_response";
-        response["config_type"] = "discovery_mode";
-        response["status"] = "success";
-        response["value"] = discoveryMode;
-        
+        DynamicJsonDocument response(512);
+        response["type"] = "configuration_response";
+        response["status"] = "ok";
         String responseStr;
         serializeJson(response, responseStr);
         mqttClients[clientIndex].println(responseStr);
@@ -337,19 +267,17 @@ void MQTTBrokerManager::forwardMessage(int senderIndex, String message) {
     }
 }
 
-void MQTTBrokerManager::forwardToSubscribers(String topic, String payload) {
+void MQTTBrokerManager::forwardToSubscribers(String topic, String message) {
     // Crear mensaje de publicación
-    JsonDocument pubMessage;
+    DynamicJsonDocument pubMessage(512);
     pubMessage["type"] = "publish";
     pubMessage["topic"] = topic;
-    pubMessage["payload"] = payload;
-    pubMessage["timestamp"] = millis();
-    
+    pubMessage["message"] = message;
     String pubMessageStr;
     serializeJson(pubMessage, pubMessageStr);
     
     // Enviar a todos los clientes conectados (implementación simple)
-    for (int i = 0; i < MAX_CLIENTS; i++) {
+    for (int i = 0; i < MAX_CLIENTS; ++i) {
         if (clientConnected[i]) {
             mqttClients[i].println(pubMessageStr);
         }
@@ -360,38 +288,42 @@ void MQTTBrokerManager::checkModuleHeartbeats() {
     deviceManager->checkModuleHeartbeats(mqttClients, clientConnected);
 }
 
-void MQTTBrokerManager::sendCommandToModule(const String& moduleId, const String& command) {
-    Serial.println("🔧 DEBUG sendCommandToModule: " + moduleId + " -> " + command);
-    
-    if (deviceManager->isModuleRegistered(moduleId)) {
-        // Buscar cliente conectado para ese módulo
-        for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (clientConnected[i]) {
-                Serial.println("🔧 DEBUG: Enviando a cliente " + String(i));
-                
-                // Enviar comando al cliente
-                JsonDocument cmdMsg;
-                cmdMsg["type"] = "command";
-                cmdMsg["module_id"] = moduleId;
-                cmdMsg["command"] = command;
-                cmdMsg["timestamp"] = millis();
-                
-                String cmdStr;
-                serializeJson(cmdMsg, cmdStr);
-                
-                mqttClients[i].println(cmdStr);
-                
-                Serial.print("📨 Comando enviado a ");
-                Serial.print(moduleId);
-                Serial.print(": ");
-                Serial.println(command);
-                break;
-            }
-        }
-    } else {
+bool MQTTBrokerManager::sendCommandToModule(const String& moduleId, const String& command, JsonVariantConst params) {
+    Serial.println("🔧 DEBUG sendCommandToModule(+params): " + moduleId + " -> " + command);
+
+    if (!deviceManager || !deviceManager->isModuleRegistered(moduleId)) {
         Serial.println("❌ Módulo no encontrado: " + moduleId);
+        return false;
     }
+
+    DynamicJsonDocument cmdMsg(1024);
+    cmdMsg["type"]      = "command";
+    cmdMsg["module_id"] = moduleId;
+    cmdMsg["command"]   = command;
+    cmdMsg["timestamp"] = millis();
+    if (!params.isNull()) {
+        cmdMsg["params"] = params; // queda como objeto JSON
+    }
+    String cmdStr; serializeJson(cmdMsg, cmdStr);
+
+    // Por ahora se reenvía a todos los clientes (cada cliente filtra por module_id)
+    bool anySent = false;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clientConnected[i]) {
+            mqttClients[i].println(cmdStr);
+            anySent = true;
+            Serial.println("📨 Comando enviado a cliente " + String(i) + ": " + cmdStr);
+        }
+    }
+    return anySent;
 }
+
+// (Opcional) mantener el viejo para compatibilidad interna
+void MQTTBrokerManager::sendCommandToModule(const String& moduleId, const String& command) {
+    StaticJsonDocument<1> empty; // params vacío
+    sendCommandToModule(moduleId, command, empty.as<JsonVariantConst>());
+}
+
 
 int MQTTBrokerManager::getConnectedClientsCount() {
     int connectedCount = 0;
@@ -409,7 +341,7 @@ void MQTTBrokerManager::sendHeartbeatToClients() {
     
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clientConnected[i] && (now - lastHeartbeatSent[i]) > HEARTBEAT_INTERVAL) {
-            JsonDocument ping;
+            DynamicJsonDocument ping(128);
             ping["type"] = "ping";
             ping["timestamp"] = now;
             ping["message"] = "keep-alive";
@@ -428,4 +360,12 @@ void MQTTBrokerManager::sendHeartbeatToClients() {
             }
         }
     }
+}
+
+// Implementación actualizada: serializar JsonDocument almacenado a String
+bool MQTTBrokerManager::getLastActionsResponse(const String& moduleId, String& outJson) {
+    auto it = actionsResponseBuffer.find(moduleId);
+    if (it == actionsResponseBuffer.end()) return false;
+    outJson = it->second;
+    return true;
 }

@@ -850,7 +850,7 @@ function displayModules(modules) {
             <div><strong>Último heartbeat:</strong> ${formatModuleTime(module.lastHeartbeat)}</div>
           </div>
           <div style="margin-top:15px; display:flex; gap:8px;">
-            <button class="btn btn-danger btn-small" onclick="deleteModule('${module.moduleId}')">Eliminar</button>
+            <button class="btn btn-danger btn-small" onclick="deleteModule('${module.moduleId}','${module.macAddress || ''}')">Eliminar</button>
             <button class="btn btn-small" onclick="openModuleMenu('${module.moduleId}')">Acciones</button>
           </div>
         </div>
@@ -861,76 +861,42 @@ function displayModules(modules) {
   document.getElementById('modulesList').innerHTML = html;
 }
 
-function deleteModule(moduleId) {
-  if (!moduleId) {
-    showMessage('ID de módulo inválida', true);
-    return;
-  }
+async function deleteModule(moduleId, macAddress = '') {
+  if (!moduleId) { showMessage('ID de módulo inválida', true); return; }
   if (!confirm('¿Eliminar módulo y persistir (EEPROM)? ' + moduleId + '?')) return;
 
-  showMessage('Eliminando módulo ' + moduleId + ' ...', false);
-
-  // Optimistic UI: quitar tarjeta visualmente inmediatamente
+  // Optimistic UI: eliminar por data-attrs (robusto)
   try {
     const cards = Array.from(document.querySelectorAll('#modulesList .device-card'));
     cards.forEach(c => {
-      const idEl = c.querySelector('.device-id');
-      if (idEl && idEl.textContent === moduleId) {
-        c.remove();
-      }
+      if (c.getAttribute('data-module-id') === moduleId) c.remove();
     });
-  } catch (e) {
-    // no romper si DOM cambia
-  }
+  } catch (e) {}
 
-  const body = 'module_id=' + encodeURIComponent(moduleId);
-
-  // Intentar deregistrar (si el endpoint existe). No abortar si devuelve 404/otro no-ok:
-  fetch('/api/modules/deregister', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body
-  })
-  .then(r => {
-    if (r.ok) {
-      return r.json().catch(() => ({ success: false }));
-    } else {
-      // No existe el endpoint o devuelve error: continuar al borrado persistente
-      console.warn('Deregister HTTP', r.status, '-> continuando con delete_device');
-      return { success: false, httpStatus: r.status };
-    }
-  })
-  .then(d => {
-    // Siempre intentar delete_device (erase) ya sea que deregister haya dicho OK o no
-    return fetch('/api/modules/delete_device', {
+  // 1) deregister por moduleId (camelCase)
+  const deregBody = 'moduleId=' + encodeURIComponent(moduleId);
+  try {
+    await fetch('/api/modules/deregister', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body + '&erase=1'
+      headers: {'Content-Type':'application/x-www-form-urlencoded'},
+      body: deregBody
     });
-  })
-  .then(r2 => {
-    if (!r2) throw new Error('No response from delete attempt');
-    if (!r2.ok) {
-      console.warn('Delete_device HTTP', r2.status);
-      return r2.json().catch(() => ({ success: false, httpStatus: r2.status }));
-    }
-    return r2.json().catch(() => ({ success: false }));
-  })
-  .then(d2 => {
-    if (d2 && d2.success) {
-      showMessage('Módulo eliminado y persistido en EEPROM', false);
-    } else {
-      showMessage('Módulo eliminado parcialmente. Revise servidor. ' + (d2 && (d2.error || d2.message || '')), true);
-    }
-    // Recargar para estado consistente
-    loadModules().catch(()=>{});
-    if (currentTab === 'dashboard') loadDashboard();
-  })
-  .catch(err => {
-    console.error('deleteModule error', err);
-    showMessage('Error eliminando módulo: ' + err.message, true);
-    loadModules();
+  } catch (_) {}
+
+  // 2) borrado persistente por MAC (o fallback a moduleId si el backend lo resuelve)
+  const eraseBody = macAddress
+      ? ('macAddress=' + encodeURIComponent(macAddress))
+      : ('moduleId='   + encodeURIComponent(moduleId));
+
+  const resp = await fetch('/api/modules/delete_device', {
+    method: 'POST',
+    headers: {'Content-Type':'application/x-www-form-urlencoded'},
+    body: eraseBody + '&erase=1'
   });
+  const json = await resp.json().catch(()=>({success:false,message:'Error de parseo'}));
+  showMessage(json.message || 'Eliminado', !json.success);
+  // Re-sync por las dudas
+  loadModules();
 }
 
 function scanAllDevices() {
@@ -1367,7 +1333,7 @@ function openModuleMenu(moduleId) {
         });
         html += `</div>
                  <div style="margin-top:10px">
-                   <button class="btn btn-danger" onclick="deleteModule('${moduleId}')">Eliminar (persistente)</button>
+                   <button class="btn btn-danger" onclick="deleteModule('${moduleId}','${mac || ''}')">Eliminar (persistente)</button>
                  </div>
                 </div>`;
         bodyEl.innerHTML = html;
@@ -1415,7 +1381,7 @@ function openModuleMenu(moduleId) {
           });
           html += `</div>
                    <div style="margin-top:10px">
-                     <button class="btn btn-danger" onclick="deleteModule('${moduleId}')">Eliminar (persistente)</button>
+                     <button class="btn btn-danger" onclick="deleteModule('${moduleId}','${mac || ''}')">Eliminar (persistente)</button>
                    </div>
                   </div>`;
           bodyEl.innerHTML = html;
@@ -1474,7 +1440,7 @@ function openModuleMenu(moduleId) {
         });
         html += `</div>
                  <div style="margin-top:10px">
-                   <button class="btn btn-danger" onclick="deleteModule('${moduleId}')">Eliminar (persistente)</button>
+                   <button class="btn btn-danger" onclick="deleteModule('${moduleId}','${mac || ''}')">Eliminar (persistente)</button>
                  </div>
                 </div>`;
         bodyEl.innerHTML = html;
