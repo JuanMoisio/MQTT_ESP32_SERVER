@@ -59,13 +59,13 @@ def main():
         choice = input(f"\n{Colors.BOLD}Opción (1-4): {Colors.END}").strip()
         
         if choice == '1':
-            print(f"{Colors.YELLOW}🚀 Ejecutando auto-upload...{Colors.END}")
-            script = Path(__file__).parent / "auto_upload.py"
+            print(f"{Colors.YELLOW}🚀 Ejecutando auto-upload (setup completo)...{Colors.END}")
+            script = Path(__file__).parent / "setup_complete.py"
             subprocess.run(["python3", str(script)])
             
         elif choice == '2':
-            print(f"{Colors.YELLOW}📺 Abriendo monitor con auto-detección...{Colors.END}")
-            script = Path(__file__).parent / "single_terminal_monitor.py"
+            print(f"{Colors.YELLOW}📺 Abriendo monitor canónico (monitor_cli)...{Colors.END}")
+            script = Path(__file__).parent / "monitor_cli.py"
             subprocess.run(["python3", str(script)])
             
         elif choice == '3':

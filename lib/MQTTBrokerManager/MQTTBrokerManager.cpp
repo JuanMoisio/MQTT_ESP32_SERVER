@@ -151,13 +151,18 @@ void MQTTBrokerManager::processMessage(int clientIndex, String payload) {
     Serial.print(msgType);
     Serial.println("'");
 
-    // Dispatch a DeviceManager con logging
     if (msgType == "module_registration") {
         Serial.println("[MQTTBrokerManager] Dispatching module_registration -> DeviceManager::handleModuleRegistration");
         if (deviceManager) deviceManager->handleModuleRegistration(clientIndex, (JsonDocument&)doc, &mqttClients[clientIndex]);
     } else if (msgType == "mac_response" || msgType == "mac") {
         Serial.println("[MQTTBrokerManager] Dispatching mac_response -> DeviceManager::handleMACResponse");
         if (deviceManager) deviceManager->handleMACResponse(clientIndex, (JsonDocument&)doc);
+        // Si llegaron mac y module_id, marcar como conectado
+        if (doc.containsKey("mac_address") && doc["mac_address"].is<const char*>()) {
+            String mac = String((const char*)doc["mac_address"]);
+            String ip = mqttClients[clientIndex].remoteIP().toString();
+            if (deviceManager) deviceManager->markDeviceConnected(mac, clientIndex, ip);
+        }
     } else if (msgType == "device_info" || msgType == "info_response") {
         Serial.println("[MQTTBrokerManager] Dispatching device_info -> DeviceManager::handleDeviceInfoResponse");
         if (deviceManager) deviceManager->handleDeviceInfoResponse(clientIndex, (JsonDocument&)doc);
@@ -166,32 +171,56 @@ void MQTTBrokerManager::processMessage(int clientIndex, String payload) {
         if (deviceManager) deviceManager->handleDeviceScanResponse(clientIndex, (JsonDocument&)doc);
     } else if (msgType == "heartbeat") {
         Serial.println("[MQTTBrokerManager] Heartbeat recibido -> procesando");
-        // Si viene module_id, actualizar heartbeat en DeviceManager
         if (doc.containsKey("module_id") && doc["module_id"].is<const char*>()) {
             String mid = String((const char*)doc["module_id"]);
             Serial.print("[MQTTBrokerManager] Heartbeat de module_id: ");
             Serial.println(mid);
             if (deviceManager) deviceManager->updateModuleHeartbeat(mid);
+
+            // Intentar resolver MAC a partir de moduleId y marcar conectado
+            if (deviceManager) {
+                String macFromModule = deviceManager->getMacByModuleId(mid);
+                if (macFromModule.length() > 0) {
+                    String ip = mqttClients[clientIndex].remoteIP().toString();
+                    deviceManager->markDeviceConnected(macFromModule, clientIndex, ip);
+                    deviceManager->reportScannedDevice(macFromModule, "", mid, clientIndex);
+                }
+            }
         }
-        // Si viene mac_address, marcar dispositivo autorizado como conectado
         if (doc.containsKey("mac_address") && doc["mac_address"].is<const char*>()) {
             String mac = String((const char*)doc["mac_address"]);
             String ip = mqttClients[clientIndex].remoteIP().toString();
             Serial.print("[MQTTBrokerManager] Heartbeat incluye MAC: ");
-            Serial.print(mac);
-            Serial.print(" -> marcando como conectado clientIndex=");
-            Serial.println(clientIndex);
+            Serial.println(mac);
             if (deviceManager) deviceManager->markDeviceConnected(mac, clientIndex, ip);
-            // Usar wrapper público en lugar de llamar al método privado
-            String moduleId = doc.containsKey("module_id") && doc["module_id"].is<const char*>() ? String((const char*)doc["module_id"]) : String("");
-            if (deviceManager) deviceManager->reportScannedDevice(mac, "", moduleId, clientIndex);
+            // Reportar también a scannedDevices
+            String mid = (doc.containsKey("module_id") && doc["module_id"].is<const char*>()) ? String((const char*)doc["module_id"]) : String("");
+            if (deviceManager) deviceManager->reportScannedDevice(mac, "", mid, clientIndex);
+        }
+    } else if (msgType == "ping_response") {
+        // Cliente respondió a ping: si incluye module_id o mac_address, marcar como conectado
+        Serial.println("[MQTTBrokerManager] ping_response recibido");
+        if (doc.containsKey("module_id") && doc["module_id"].is<const char*>()) {
+            String mid = String((const char*)doc["module_id"]);
+            if (deviceManager) deviceManager->updateModuleHeartbeat(mid);
+            if (deviceManager) {
+                String macFromModule = deviceManager->getMacByModuleId(mid);
+                if (macFromModule.length() > 0) {
+                    String ip = mqttClients[clientIndex].remoteIP().toString();
+                    deviceManager->markDeviceConnected(macFromModule, clientIndex, ip);
+                }
+            }
+        }
+        if (doc.containsKey("mac_address") && doc["mac_address"].is<const char*>()) {
+            String mac = String((const char*)doc["mac_address"]);
+            String ip = mqttClients[clientIndex].remoteIP().toString();
+            if (deviceManager) deviceManager->markDeviceConnected(mac, clientIndex, ip);
         }
     } else {
         Serial.println("[MQTTBrokerManager] Tipo no manejado localmente -> forwarding/raw handling");
-        // Manejo genérico: si tu lógica requiere, puedes reenviar a todos o a un handler genérico
     }
 
-    // Ejemplo: guardar actions responses si vienen
+    // Guardar actions responses si vienen
     if (doc.containsKey("module_id") && doc.containsKey("actions")) {
         String mid = String((const char*)doc["module_id"]);
         String serializedActions;

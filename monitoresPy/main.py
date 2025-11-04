@@ -77,12 +77,14 @@ def setup_complete():
 
 def open_simple_monitors():
     """Abre monitores serie simples"""
-    script_path = Path(__file__).parent / "simple_monitor.py"
+    # Use canonical monitor_cli which supports detection/history
+    script_path = Path(__file__).parent / "monitor_cli.py"
     subprocess.run(["python3", str(script_path)])
 
 def open_advanced_monitor():
     """Abre monitor avanzado Python"""
-    script_path = Path(__file__).parent / "dual_monitor.py"
+    # Advanced monitor functionality has been unified into monitor_cli.py
+    script_path = Path(__file__).parent / "monitor_cli.py"
     subprocess.run(["python3", str(script_path)])
 
 def upload_broker():

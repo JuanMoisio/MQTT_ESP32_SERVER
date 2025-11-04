@@ -1067,3 +1067,11 @@ void DeviceManager::markDeviceConnected(const String& macAddress, int clientInde
         Serial.println("[DeviceManager] markDeviceConnected: MAC no encontrada en authorizedDevices: " + macAddress);
     }
 }
+
+// Nuevo: devuelve la MAC asociada a un moduleId en scannedDevices (o "" si no existe)
+String DeviceManager::getMacByModuleId(const String& moduleId) {
+    for (const auto &d : scannedDevices) {
+        if (d.moduleId == moduleId) return d.macAddress;
+    }
+    return String("");
+}

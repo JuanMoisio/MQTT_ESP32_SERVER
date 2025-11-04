@@ -1,0 +1,19 @@
+2025-11-03 09:26:13 - No duration provided for automatic run; using default 10s
+2025-11-03 09:26:13 - Connection failed: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+2025-11-03 09:26:13 - Cannot open serial port; aborting
+2025-11-03 09:27:23 - No duration provided for automatic run; using default 10s
+2025-11-03 09:27:23 - Connection failed on /dev/ttyUSB0: [Errno 2] could not open port /dev/ttyUSB0: [Errno 2] No such file or directory: '/dev/ttyUSB0'
+2025-11-03 09:27:23 - Detected serial ports: ['/dev/cu.debug-console (n/a)', '/dev/cu.Bluetooth-Incoming-Port (n/a)', '/dev/cu.usbserial-1110 (USB Serial)', '/dev/cu.usbmodem11201 (USB JTAG/serial debug unit)']
+2025-11-03 09:27:23 - Auto-selecting port /dev/cu.usbserial-1110 (USB Serial)
+2025-11-03 09:27:23 - Sensor connected on auto-detected port /dev/cu.usbserial-1110@57600
+2025-11-03 09:27:23 - Running diagnostic test...
+2025-11-03 09:27:24 - No diagnostic response
+2025-11-03 09:27:24 - Running scan test...
+2025-11-03 09:27:25 - Scan response: 38d66fcec8e7bd316f2708430c0b0f21a868d68898e8c8e898e8a8c4d688cecc5b0c0a21cc
+2025-11-03 09:27:25 - Running finger commands test...
+2025-11-03 09:27:26 - No enroll response
+2025-11-03 09:27:26 - Test results: {'diagnostic': False, 'scan': True, 'finger': False}
+2025-11-03 09:27:27 - Starting single terminal monitor (press Ctrl-C to stop)
+2025-11-03 09:27:27 - RAW: 38d66fcec8e7bd313fc408430c0b0f21a868d68898e8c8e898e8e468d688cecc5b0c0a21cc
+2025-11-03 09:27:37 - Monitor stopped
+2025-11-03 09:27:38 - Done

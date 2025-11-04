@@ -348,10 +348,24 @@
                     <div id="consultaStatus" class="status-message" style="display: none;"></div>
                 </div>
                 
-                <!-- Botón para escanear huella en el módulo fingerprint -->
-                <div style="margin: 20px 0;">
+                <!-- Botones para controlar el módulo fingerprint -->
+                <div style="margin: 20px 0; display: flex; gap: 10px;">
                     <button type="button" id="scanFingerprintBtn" class="btn btn-secondary">🔍 Escanear Huella (Fingerprint)</button>
+                    <button type="button" id="enrollFingerprintBtn" class="btn btn-secondary">➕ Enrollar Huella (Fingerprint)</button>
                 </div>
+                
+                <!-- Formulario para eliminar huella -->
+                <div class="form-section" style="margin: 20px 0;">
+                    <h3>🗑️ Eliminar Huella por ID</h3>
+                    <div style="display: flex; gap: 10px; align-items: flex-end;">
+                        <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                            <label for="deleteFingerprintId">ID de Usuario (0-199)</label>
+                            <input type="number" id="deleteFingerprintId" min="0" max="199" placeholder="Ingrese ID a eliminar">
+                        </div>
+                        <button type="button" id="deleteFingerprintBtn" class="btn btn-danger">🗑️ Eliminar Huella</button>
+                    </div>
+                </div>
+                
                 <!-- Lista de dispositivos -->
                 <div id="deviceList"></div>
             </div>
@@ -404,12 +418,78 @@
             });
         }
 
-        // Botón funcional para escanear huella en el módulo fingerprint
+        // Función para obtener el moduleId real del módulo fingerprint
+        function getFingerprintModuleId(callback) {
+            fetch('/api/modules')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.modules && data.modules.length > 0) {
+                        // Buscar el primer módulo de tipo fingerprint
+                        const fpModule = data.modules.find(m => m.moduleType === 'fingerprint');
+                        if (fpModule) {
+                            callback(fpModule.moduleId);
+                        } else {
+                            alert('⚠️ No se encontró ningún módulo de huella conectado');
+                        }
+                    } else {
+                        alert('⚠️ No hay módulos conectados');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error obteniendo módulos:', error);
+                    alert('❌ Error al obtener información de módulos');
+                });
+        }
+
+        // Botones funcionales para el módulo fingerprint
         document.addEventListener('DOMContentLoaded', function() {
             var scanBtn = document.getElementById('scanFingerprintBtn');
             if (scanBtn) {
                 scanBtn.addEventListener('click', function() {
-                    sendModuleAction('fingerprint', 'scan');
+                    getFingerprintModuleId(function(moduleId) {
+                        sendModuleAction(moduleId, 'scan');
+                    });
+                });
+            }
+            
+            var enrollBtn = document.getElementById('enrollFingerprintBtn');
+            if (enrollBtn) {
+                enrollBtn.addEventListener('click', function() {
+                    getFingerprintModuleId(function(moduleId) {
+                        // Pedir ID opcional al usuario
+                        var userId = prompt('Ingrese el ID de usuario (0-199) o deje vacío para auto-asignar:');
+                        var params = {};
+                        if (userId !== null && userId.trim() !== '') {
+                            params.id = userId.trim();
+                        }
+                        sendModuleAction(moduleId, 'enroll', params);
+                    });
+                });
+            }
+            
+            var deleteBtn = document.getElementById('deleteFingerprintBtn');
+            if (deleteBtn) {
+                deleteBtn.addEventListener('click', function() {
+                    getFingerprintModuleId(function(moduleId) {
+                        var userIdInput = document.getElementById('deleteFingerprintId');
+                        var userId = userIdInput.value.trim();
+                        
+                        if (userId === '') {
+                            alert('⚠️ Por favor ingrese un ID de usuario');
+                            return;
+                        }
+                        
+                        var idNum = parseInt(userId);
+                        if (isNaN(idNum) || idNum < 0 || idNum > 199) {
+                            alert('⚠️ ID inválido. Debe ser un número entre 0 y 199');
+                            return;
+                        }
+                        
+                        if (confirm('¿Está seguro de eliminar la huella del usuario ID ' + idNum + '?')) {
+                            sendModuleAction(moduleId, 'delete', { id: userId });
+                            userIdInput.value = ''; // Limpiar campo después de enviar
+                        }
+                    });
                 });
             }
         });

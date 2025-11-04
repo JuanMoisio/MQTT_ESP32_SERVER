@@ -107,6 +107,9 @@ class DeviceManager {
     // Nuevo: wrapper público para reportar un dispositivo escaneado (delegará en addToScannedDevices)
     void reportScannedDevice(const String& macAddress, const String& deviceType, const String& moduleId, int clientIndex = -1);
 
+    // Nuevo: obtener MAC conocida a partir de un moduleId (busca en scannedDevices)
+    String getMacByModuleId(const String& moduleId);
+
     String getModuleIdByMac(const String& macAddress);
     ModuleInfo* getModuleById(const String& moduleId);
 

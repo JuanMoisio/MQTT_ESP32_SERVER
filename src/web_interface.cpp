@@ -1487,9 +1487,40 @@ function sendModuleCommand(moduleId, commandName, params = {}) {
 /* Helper para llamadas desde UI (decodifica el nombre si fue codificado) */
 function executeCapability(moduleId, encodedCapName) {
   const capName = decodeURIComponent(encodedCapName);
-  if (!confirm('Ejecutar "' + capName + '" en ' + moduleId + '?')) return;
-  // Para capacidades que requieren parámetros añadir UI adicional; por ahora se envían sin params
-  sendModuleCommand(moduleId, capName, {}).catch(()=>{});
+  let params = {};
+  
+  // Para comandos que requieren ID, pedirlo al usuario
+  if (capName === 'delete') {
+    const userId = prompt('Ingrese el ID de la huella a eliminar (0-199):');
+    if (userId === null) return; // Usuario canceló
+    if (userId.trim() === '') {
+      alert('⚠️ Debe ingresar un ID válido');
+      return;
+    }
+    const idNum = parseInt(userId);
+    if (isNaN(idNum) || idNum < 0 || idNum > 199) {
+      alert('⚠️ ID inválido. Debe ser un número entre 0 y 199');
+      return;
+    }
+    params.id = userId.trim();
+    if (!confirm('¿Eliminar huella con ID ' + idNum + '?')) return;
+  } else if (capName === 'enroll') {
+    const userId = prompt('Ingrese el ID para la nueva huella (0-199) o deje vacío para auto-asignar:');
+    if (userId === null) return; // Usuario canceló
+    if (userId.trim() !== '') {
+      const idNum = parseInt(userId);
+      if (isNaN(idNum) || idNum < 0 || idNum > 199) {
+        alert('⚠️ ID inválido. Debe ser un número entre 0 y 199');
+        return;
+      }
+      params.id = userId.trim();
+    }
+    if (!confirm('Enrollar nueva huella en ' + moduleId + (params.id ? ' con ID ' + params.id : ' (ID auto)') + '?')) return;
+  } else {
+    if (!confirm('Ejecutar "' + capName + '" en ' + moduleId + '?')) return;
+  }
+  
+  sendModuleCommand(moduleId, capName, params).catch(()=>{});
 }
 
 // ...existing code...

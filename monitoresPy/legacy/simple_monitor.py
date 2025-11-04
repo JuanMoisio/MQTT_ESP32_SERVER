@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""
+Simple ESP32 Dual Monitor (legacy copy)
+"""
+
+import subprocess
+import time
+
+def open_terminal(port, label):
+    while True:
+        try:
+            print(f"Intentando abrir terminal para {label} en {port}...")
+            cmd = [
+                "osascript", "-e",
+                f'tell application "Terminal" to do script "screen {port} 115200"'
+            ]
+            result = subprocess.run(cmd)
+            if result.returncode == 0:
+                print(f"✅ Terminal abierta para {label}!")
+                break
+            else:
+                print(f"❌ Error abriendo {label}. Reintentando en 5 segundos...")
+        except Exception as e:
+            print(f"❌ Error: {e}. Reintentando en 5 segundos...")
+        time.sleep(5)
+
+def main():
+    print("🚀 ESP32 Dual Monitor Simple (con reintentos)")
+    print("=" * 50)
+    esp32c3_port = "/dev/cu.usbmodem31201"  # ESP32-C3 Broker
+    esp32_wroom_port = "/dev/cu.usbserial-3110"  # ESP32 WROOM Cliente
+    print(f"📡 ESP32-C3 Broker: {esp32c3_port}")
+    print(f"🔍 ESP32-WROOM Cliente: {esp32_wroom_port}")
+    print("=" * 50)
+    open_terminal(esp32c3_port, "ESP32-C3 Broker")
+    open_terminal(esp32_wroom_port, "ESP32-WROOM Cliente")
+    print("✅ Ambas terminales abiertas!")
+
+if __name__ == "__main__":
+    main()
